@@ -230,6 +230,7 @@ def main(args):
         image_std=args.image_std,
         aug_cfg=args.aug_cfg,
         output_dict=True,
+        geometry=args.geometry,
     )
     if args.distill:
         # FIXME: currently assumes the model you're distilling from has the same tokenizer & transforms.

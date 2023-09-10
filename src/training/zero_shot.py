@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from open_clip import get_input_dtype, get_tokenizer, build_zero_shot_classifier, \
-    IMAGENET_CLASSNAMES, OPENAI_IMAGENET_TEMPLATES
+    cosine_similarity, euclidean_distance, IMAGENET_CLASSNAMES, OPENAI_IMAGENET_TEMPLATES
 from .precision import get_autocast
 
 
@@ -18,6 +18,7 @@ def accuracy(output, target, topk=(1,)):
 def run(model, classifier, dataloader, args):
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
+    metric = cosine_similarity if args.geometry=='clip' else euclidean_distance
 
     with torch.no_grad():
         top1, top5, n = 0., 0., 0.
@@ -29,7 +30,7 @@ def run(model, classifier, dataloader, args):
                 # predict
                 output = model(image=images)
                 image_features = output['image_features'] if isinstance(output, dict) else output[0]
-                logits = 100. * image_features @ classifier
+                logits = 100. * metric(image_features, classifier)
 
             # measure accuracy
             acc1, acc5 = accuracy(logits, target, topk=(1, 5))

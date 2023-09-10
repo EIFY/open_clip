@@ -195,8 +195,10 @@ class CLIP(nn.Module):
             quick_gelu: bool = False,
             cast_dtype: Optional[torch.dtype] = None,
             output_dict: bool = False,
+            normalize: bool = False,
     ):
         super().__init__()
+        self.normalize = normalize
         self.output_dict = output_dict
         self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
 
@@ -210,7 +212,12 @@ class CLIP(nn.Module):
         self.text_projection = text.text_projection
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
 
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        init_scale = torch.ones([])
+        if normalize:
+            init_scale = init_scale * np.log(1 / 0.07)
+        else:
+            init_scale = init_scale * np.sqrt(embed_dim) / 32
+        self.logit_scale = nn.Parameter(init_scale)
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -244,15 +251,19 @@ class CLIP(nn.Module):
             image: Optional[torch.Tensor] = None,
             text: Optional[torch.Tensor] = None,
     ):
-        image_features = self.encode_image(image, normalize=True) if image is not None else None
-        text_features = self.encode_text(text, normalize=True) if text is not None else None
+        image_features = self.encode_image(image, normalize=self.normalize) if image is not None else None
+        text_features = self.encode_text(text, normalize=self.normalize) if text is not None else None
+        if self.normalize:
+            logit_scale = self.logit_scale.exp()
+        else:
+            logit_scale = self.logit_scale.reciprocal()
         if self.output_dict:
             return {
                 "image_features": image_features,
                 "text_features": text_features,
-                "logit_scale": self.logit_scale.exp()
+                "logit_scale": logit_scale
             }
-        return image_features, text_features, self.logit_scale.exp()
+        return image_features, text_features, logit_scale
 
 
 class CustomTextCLIP(nn.Module):

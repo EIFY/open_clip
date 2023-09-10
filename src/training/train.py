@@ -247,6 +247,7 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     input_dtype = get_input_dtype(args.precision)
 
     if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
+        assert args.geometry=='clip', "Validation loss is only implemented for plain vanilla CLIP"
         dataloader = data['val'].dataloader
         num_samples = 0
         samples_per_val = dataloader.num_samples

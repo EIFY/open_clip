@@ -63,6 +63,17 @@ def gather_features(
     return all_image_features, all_text_features
 
 
+def cosine_similarity(x, y):
+    return x @ y.T
+
+
+def euclidean_distance(x, y):
+    x = x.unsqueeze(1)
+    y = y.unsqueeze(0)
+    squared = (x - y) ** 2
+    return -squared.sum(-1).sqrt()
+
+
 class ClipLoss(nn.Module):
 
     def __init__(
@@ -73,6 +84,7 @@ class ClipLoss(nn.Module):
             rank=0,
             world_size=1,
             use_horovod=False,
+            geometry='clip',
     ):
         super().__init__()
         self.local_loss = local_loss
@@ -81,7 +93,7 @@ class ClipLoss(nn.Module):
         self.rank = rank
         self.world_size = world_size
         self.use_horovod = use_horovod
-
+        self.metric = cosine_similarity if geometry=='clip' else euclidean_distance
         # cache state
         self.prev_num_logits = 0
         self.labels = {}
@@ -106,14 +118,14 @@ class ClipLoss(nn.Module):
                 self.local_loss, self.gather_with_grad, self.rank, self.world_size, self.use_horovod)
 
             if self.local_loss:
-                logits_per_image = logit_scale * image_features @ all_text_features.T
-                logits_per_text = logit_scale * text_features @ all_image_features.T
+                logits_per_image = logit_scale * self.metric(image_features, all_text_features)
+                logits_per_text = logit_scale * self.metric(text_features, all_image_features)
             else:
-                logits_per_image = logit_scale * all_image_features @ all_text_features.T
+                logits_per_image = logit_scale * self.metric(all_image_features, all_text_features)
                 logits_per_text = logits_per_image.T
         else:
-            logits_per_image = logit_scale * image_features @ text_features.T
-            logits_per_text = logit_scale * text_features @ image_features.T
+            logits_per_image = logit_scale * self.metric(image_features, text_features)
+            logits_per_text = logits_per_image.T
         
         return logits_per_image, logits_per_text
 
