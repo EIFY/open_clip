@@ -7,7 +7,6 @@ import logging
 import math
 from typing import Optional, Tuple, Union
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -196,6 +195,8 @@ class CLIP(nn.Module):
             cast_dtype: Optional[torch.dtype] = None,
             output_dict: bool = False,
             normalize: bool = False,
+            init_scale: float = 2.659260036932778,  # np.log(1 / 0.07)
+            exp_scale: bool = True,
     ):
         super().__init__()
         self.normalize = normalize
@@ -211,13 +212,8 @@ class CLIP(nn.Module):
         self.ln_final = text.ln_final
         self.text_projection = text.text_projection
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
-
-        init_scale = torch.ones([])
-        if normalize:
-            init_scale = init_scale * np.log(1 / 0.07)
-        else:
-            init_scale = init_scale * np.sqrt(embed_dim) / 32
-        self.logit_scale = nn.Parameter(init_scale)
+        self.logit_scale = nn.Parameter(init_scale * torch.ones([]))
+        self.exp_scale = exp_scale
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -253,7 +249,7 @@ class CLIP(nn.Module):
     ):
         image_features = self.encode_image(image, normalize=self.normalize) if image is not None else None
         text_features = self.encode_text(text, normalize=self.normalize) if text is not None else None
-        if self.normalize:
+        if self.exp_scale:
             logit_scale = self.logit_scale.exp()
         else:
             logit_scale = self.logit_scale.reciprocal()
@@ -277,6 +273,7 @@ class CustomTextCLIP(nn.Module):
             quick_gelu: bool = False,
             cast_dtype: Optional[torch.dtype] = None,
             output_dict: bool = False,
+            init_scale: float = 2.659260036932778,  # np.log(1 / 0.07)
     ):
         super().__init__()
         self.output_dict = output_dict
@@ -284,7 +281,7 @@ class CustomTextCLIP(nn.Module):
         self.text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
         self.context_length = self.text.context_length
         self.vocab_size = self.text.vocab_size
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.logit_scale = nn.Parameter(init_scale * torch.ones([]))
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991

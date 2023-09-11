@@ -67,11 +67,22 @@ def cosine_similarity(x, y):
     return x @ y.T
 
 
+def nsphere_arc(x, y):
+    return -torch.acos(x @ y.T)
+
+
 def euclidean_distance(x, y):
     x = x.unsqueeze(1)
     y = y.unsqueeze(0)
     squared = (x - y) ** 2
     return -squared.sum(-1).sqrt()
+
+
+METRICS = {
+    'clip': cosine_similarity,
+    'elliptic': nsphere_arc,
+    'euclidean': euclidean_distance,
+}
 
 
 class ClipLoss(nn.Module):
@@ -93,7 +104,7 @@ class ClipLoss(nn.Module):
         self.rank = rank
         self.world_size = world_size
         self.use_horovod = use_horovod
-        self.metric = cosine_similarity if geometry=='clip' else euclidean_distance
+        self.metric = METRICS[geometry]
         # cache state
         self.prev_num_logits = 0
         self.labels = {}

@@ -231,6 +231,7 @@ def main(args):
         aug_cfg=args.aug_cfg,
         output_dict=True,
         geometry=args.geometry,
+        init_scale=args.init_scale,
     )
     if args.distill:
         # FIXME: currently assumes the model you're distilling from has the same tokenizer & transforms.

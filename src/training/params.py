@@ -438,9 +438,15 @@ def parse_args(args):
     )
     parser.add_argument(
         "--geometry",
-        choices=['clip', 'euclidean'],
+        choices=['clip', 'elliptic', 'euclidean'],
         default='clip',
         help='Geometry of the embedding space.'
+    )
+    parser.add_argument(
+        "--init-scale",
+        type=float,
+        default=2.659260036932778,  # np.log(1 / 0.07)
+        help="Initial logit scale."
     )
     args = parser.parse_args(args)
 

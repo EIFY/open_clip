@@ -125,6 +125,7 @@ def create_model(
         output_dict: Optional[bool] = None,
         require_pretrained: bool = False,
         geometry: str = 'clip',
+        init_scale: float = 2.659260036932778,  # np.log(1 / 0.07)
 ):
     has_hf_hub_prefix = model_name.startswith(HF_HUB_PREFIX)
     if has_hf_hub_prefix:
@@ -194,8 +195,13 @@ def create_model(
             else:
                 model = CustomTextCLIP(**model_cfg, cast_dtype=cast_dtype)
         else:
-            model = CLIP(**model_cfg, cast_dtype=cast_dtype, normalize=(geometry=='clip'))
-
+            model = CLIP(
+                **model_cfg,
+                cast_dtype=cast_dtype,
+                normalize=geometry in ('elliptic', 'clip'),
+                init_scale=init_scale,
+                exp_scale=(geometry == 'clip'),
+            )
         if precision in ("fp16", "bf16"):
             dtype = torch.float16 if 'fp16' in precision else torch.bfloat16
             # manual mixed precision that matches original OpenAI behaviour
@@ -311,6 +317,7 @@ def create_model_and_transforms(
         cache_dir: Optional[str] = None,
         output_dict: Optional[bool] = None,
         geometry: str = 'clip',
+        init_scale: float = 2.659260036932778,  # np.log(1 / 0.07)
 ):
     model = create_model(
         model_name,
@@ -327,6 +334,7 @@ def create_model_and_transforms(
         cache_dir=cache_dir,
         output_dict=output_dict,
         geometry=geometry,
+        init_scale=init_scale,
     )
 
     image_mean = image_mean or getattr(model.visual, 'image_mean', None)
