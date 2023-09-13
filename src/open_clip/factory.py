@@ -198,9 +198,8 @@ def create_model(
             model = CLIP(
                 **model_cfg,
                 cast_dtype=cast_dtype,
-                normalize=geometry in ('elliptic', 'clip'),
+                geometry=geometry,
                 init_scale=init_scale,
-                exp_scale=(geometry == 'clip'),
             )
         if precision in ("fp16", "bf16"):
             dtype = torch.float16 if 'fp16' in precision else torch.bfloat16

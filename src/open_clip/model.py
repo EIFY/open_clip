@@ -7,6 +7,7 @@ import logging
 import math
 from typing import Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -194,12 +195,10 @@ class CLIP(nn.Module):
             quick_gelu: bool = False,
             cast_dtype: Optional[torch.dtype] = None,
             output_dict: bool = False,
-            normalize: bool = False,
+            geometry: str = 'clip',
             init_scale: float = 2.659260036932778,  # np.log(1 / 0.07)
-            exp_scale: bool = True,
     ):
         super().__init__()
-        self.normalize = normalize
         self.output_dict = output_dict
         self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
 
@@ -212,8 +211,14 @@ class CLIP(nn.Module):
         self.ln_final = text.ln_final
         self.text_projection = text.text_projection
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
+        self.geometry = geometry
         self.logit_scale = nn.Parameter(init_scale * torch.ones([]))
-        self.exp_scale = exp_scale
+        self.normalize = geometry in ('elliptic', 'clip')
+        self.exp_scale = geometry in ('hyperbolic', 'clip')
+        if geometry == 'hyperbolic':
+            self.alpha_img = nn.Parameter(np.log(np.sqrt(1 / embed_dim)) * torch.ones([]))
+            self.alpha_txt = nn.Parameter(np.log(np.sqrt(1 / embed_dim)) * torch.ones([]))
+            self.curvature = nn.Parameter(torch.zeros([]))
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -249,17 +254,24 @@ class CLIP(nn.Module):
     ):
         image_features = self.encode_image(image, normalize=self.normalize) if image is not None else None
         text_features = self.encode_text(text, normalize=self.normalize) if text is not None else None
+        curvature = None
         if self.exp_scale:
             logit_scale = self.logit_scale.exp()
         else:
             logit_scale = self.logit_scale.reciprocal()
+        if self.geometry == 'hyperbolic':
+            logit_scale = torch.clamp(logit_scale, max=100.)
+            image_features = self.alpha_img.exp() * image_features if image_features is not None else None
+            text_features = self.alpha_txt.exp() * text_features if text_features is not None else None
+            curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
         if self.output_dict:
             return {
                 "image_features": image_features,
                 "text_features": text_features,
-                "logit_scale": logit_scale
+                "logit_scale": logit_scale,
+                "curvature": curvature,
             }
-        return image_features, text_features, logit_scale
+        return image_features, text_features, logit_scale, curvature
 
 
 class CustomTextCLIP(nn.Module):

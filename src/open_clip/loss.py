@@ -63,25 +63,42 @@ def gather_features(
     return all_image_features, all_text_features
 
 
-def cosine_similarity(x, y):
+def cosine_similarity(x, y, _):
     return x @ y.T
 
 
-def nsphere_arc(x, y):
+def nsphere_arc(x, y, _):
     return -torch.acos(x @ y.T)
 
 
-def euclidean_distance(x, y):
+def euclidean_distance(x, y, _):
     x = x.unsqueeze(1)
     y = y.unsqueeze(0)
     squared = (x - y) ** 2
     return -squared.sum(-1).sqrt()
 
 
+def _exponential_map(x, curvature):
+    c_sqrt_norm = torch.sqrt(curvature) * x.norm(dim=1, keepdim=True)
+    x_space = torch.sinh(c_sqrt_norm) / c_sqrt_norm * x
+    x_time = torch.sqrt(curvature.reciprocal() + (x_space ** 2).sum(-1))
+    return x_space, x_time
+
+
+def lorentzian_distance(x, y, curvature):
+    # FP32 for exponential map and losses for numerical stability,
+    # per https://arxiv.org/abs/2304.09172
+    x, y, curvature = x.double(), y.double(), curvature.double()
+    x_space, x_time = _exponential_map(x, curvature)
+    y_space, y_time = _exponential_map(y, curvature)
+    return -torch.rsqrt(curvature) * torch.acosh(-curvature * (x_space @ y_space.T - torch.outer(x_time, y_time)))
+
+
 METRICS = {
     'clip': cosine_similarity,
     'elliptic': nsphere_arc,
     'euclidean': euclidean_distance,
+    'hyperbolic': lorentzian_distance,
 }
 
 
@@ -122,27 +139,27 @@ class ClipLoss(nn.Module):
             labels = self.labels[device]
         return labels
 
-    def get_logits(self, image_features, text_features, logit_scale):
+    def get_logits(self, image_features, text_features, logit_scale, curvature):
         if self.world_size > 1:
             all_image_features, all_text_features = gather_features(
                 image_features, text_features,
                 self.local_loss, self.gather_with_grad, self.rank, self.world_size, self.use_horovod)
 
             if self.local_loss:
-                logits_per_image = logit_scale * self.metric(image_features, all_text_features)
-                logits_per_text = logit_scale * self.metric(text_features, all_image_features)
+                logits_per_image = logit_scale * self.metric(image_features, all_text_features, curvature)
+                logits_per_text = logit_scale * self.metric(text_features, all_image_features, curvature)
             else:
-                logits_per_image = logit_scale * self.metric(all_image_features, all_text_features)
+                logits_per_image = logit_scale * self.metric(all_image_features, all_text_features, curvature)
                 logits_per_text = logits_per_image.T
         else:
-            logits_per_image = logit_scale * self.metric(image_features, text_features)
+            logits_per_image = logit_scale * self.metric(image_features, text_features, curvature)
             logits_per_text = logits_per_image.T
         
         return logits_per_image, logits_per_text
 
-    def forward(self, image_features, text_features, logit_scale, output_dict=False):
+    def forward(self, image_features, text_features, logit_scale, curvature, output_dict=False):
         device = image_features.device
-        logits_per_image, logits_per_text = self.get_logits(image_features, text_features, logit_scale)
+        logits_per_image, logits_per_text = self.get_logits(image_features, text_features, logit_scale, curvature)
 
         labels = self.get_ground_truth(device, logits_per_image.shape[0])
 

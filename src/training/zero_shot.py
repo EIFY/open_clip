@@ -29,8 +29,11 @@ def run(model, classifier, dataloader, args):
             with autocast():
                 # predict
                 output = model(image=images)
-                image_features = output['image_features'] if isinstance(output, dict) else output[0]
-                logits = 100. * metric(image_features, classifier)
+                if isinstance(output, dict):
+                    image_features, curvature = output['image_features'], output['curvature']
+                else:
+                    image_features, _, _, curvature = output
+                logits = 100. * metric(image_features, classifier, curvature)
 
             # measure accuracy
             acc1, acc5 = accuracy(logits, target, topk=(1, 5))
