@@ -214,10 +214,10 @@ class CLIP(nn.Module):
         self.geometry = geometry
         self.logit_scale = nn.Parameter(init_scale * torch.ones([]))
         self.normalize = geometry in ('elliptic', 'clip')
-        self.exp_scale = geometry in ('hyperbolic', 'clip')
+        self.dim_scale = np.sqrt(1 / embed_dim)
         if geometry == 'hyperbolic':
-            self.alpha_img = nn.Parameter(np.log(np.sqrt(1 / embed_dim)) * torch.ones([]))
-            self.alpha_txt = nn.Parameter(np.log(np.sqrt(1 / embed_dim)) * torch.ones([]))
+            self.alpha_img = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
+            self.alpha_txt = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.curvature = nn.Parameter(torch.zeros([]))
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
@@ -252,18 +252,20 @@ class CLIP(nn.Module):
             image: Optional[torch.Tensor] = None,
             text: Optional[torch.Tensor] = None,
     ):
-        image_features = self.encode_image(image, normalize=self.normalize) if image is not None else None
-        text_features = self.encode_text(text, normalize=self.normalize) if text is not None else None
         curvature = None
-        if self.exp_scale:
-            logit_scale = self.logit_scale.exp()
-        else:
-            logit_scale = self.logit_scale.reciprocal()
-        if self.geometry == 'hyperbolic':
-            logit_scale = torch.clamp(logit_scale, max=100.)
-            image_features = self.alpha_img.exp() * image_features if image_features is not None else None
-            text_features = self.alpha_txt.exp() * text_features if text_features is not None else None
+        logit_scale = self.logit_scale.exp()
+        if self.geometry == 'euclidean':
+            dim_scale_img = dim_scale_txt = self.dim_scale
+        elif self.geometry == 'hyperbolic':
+            dim_scale_img = self.alpha_img.exp()
+            dim_scale_txt = self.alpha_txt.exp()
             curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
+        else:
+            dim_scale_img = dim_scale_txt = 1.
+            
+        image_features = dim_scale_img * self.encode_image(image, normalize=self.normalize) if image is not None else None
+        text_features = dim_scale_txt * self.encode_text(text, normalize=self.normalize) if text is not None else None
+            
         if self.output_dict:
             return {
                 "image_features": image_features,
