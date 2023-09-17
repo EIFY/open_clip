@@ -295,6 +295,7 @@ def create_loss(args):
         world_size=args.world_size,
         use_horovod=args.horovod,
         geometry=args.geometry,
+        entailment_weight=args.entailment_weight,
     )
 
 

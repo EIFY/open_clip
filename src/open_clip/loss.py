@@ -102,6 +102,20 @@ METRICS = {
 }
 
 
+def entailment(x, y, curvature):
+    # FP32 for exponential map and losses for numerical stability,
+    # per https://arxiv.org/abs/2304.09172
+    x, y, curvature = x.double(), y.double(), curvature.double()
+    K = 0.1
+    x_space, x_time = _exponential_map(x, curvature)
+    x_space_norm = x_space.norm(dim=1)
+    aper = torch.asin(torch.clamp(2 * K / (torch.sqrt(curvature) * x_space_norm), max=1.))
+    y_space, y_time = _exponential_map(y, curvature)
+    l = (x_space * y_space).sum(-1) - x_time * y_time
+    ext = torch.acos((y_time + x_time * curvature * l) / (x_space_norm * torch.sqrt((curvature * l) ** 2 - 1.)))
+    return torch.clamp(ext - aper, min=0.).mean()
+
+
 class ClipLoss(nn.Module):
 
     def __init__(
@@ -113,6 +127,7 @@ class ClipLoss(nn.Module):
             world_size=1,
             use_horovod=False,
             geometry='clip',
+            entailment_weight=0.0,
     ):
         super().__init__()
         self.local_loss = local_loss
@@ -122,6 +137,7 @@ class ClipLoss(nn.Module):
         self.world_size = world_size
         self.use_horovod = use_horovod
         self.metric = METRICS[geometry]
+        self.entailment_weight = entailment_weight if geometry == 'hyperbolic' else 0.0
         # cache state
         self.prev_num_logits = 0
         self.labels = {}
@@ -163,12 +179,18 @@ class ClipLoss(nn.Module):
 
         labels = self.get_ground_truth(device, logits_per_image.shape[0])
 
-        total_loss = (
+        total_loss = contrastive_loss = (
             F.cross_entropy(logits_per_image, labels) +
             F.cross_entropy(logits_per_text, labels)
         ) / 2
+        output = {"contrastive_loss": contrastive_loss}
 
-        return {"contrastive_loss": total_loss} if output_dict else total_loss
+        if self.entailment_weight:
+            entailment_loss = self.entailment_weight * entailment(text_features, image_features, curvature)
+            output["entailment_loss"] = entailment_loss
+            total_loss = contrastive_loss + entailment_loss
+
+        return output if output_dict else total_loss
 
 
 class CoCaLoss(ClipLoss):

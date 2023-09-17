@@ -448,6 +448,12 @@ def parse_args(args):
         default=2.659260036932778,  # np.log(1 / 0.07)
         help="Initial logit scale."
     )
+    parser.add_argument(
+        "--entailment-weight",
+        type=float,
+        default=0.0,
+        help="Entailment loss weight."
+    )
     args = parser.parse_args(args)
 
     # If some params are not passed, we use the default values based on model name.
