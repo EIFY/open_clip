@@ -14,6 +14,7 @@ import pandas as pd
 import torch
 import torchvision.datasets as datasets
 import webdataset as wds
+import wordsegment as ws
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler, IterableDataset, get_worker_info
 from torch.utils.data.distributed import DistributedSampler
@@ -172,7 +173,7 @@ def count_samples(dataloader):
 
 
 def filter_no_caption_or_no_image(sample):
-    has_caption = ('txt' in sample)
+    has_caption = ('json' in sample or 'txt' in sample)
     has_image = ('png' in sample or 'jpg' in sample or 'jpeg' in sample or 'webp' in sample)
     return has_caption and has_image
 
@@ -325,6 +326,24 @@ class ResampledShards2(IterableDataset):
                 yield dict(url=self.rng.choices(self.urls, weights=self.weights, k=1)[0])
 
 
+class RedcapsJsonPreprocessor:
+
+    def __init__(self, redcaps_prefix_prob, tokenizer):
+        self.redcaps_prefix_prob = redcaps_prefix_prob
+        self.tokenizer = tokenizer
+        self._subreddit_segs = {}
+
+    def __call__(self, ann):
+        caption = ann["caption"]
+        if random.random() <= self.redcaps_prefix_prob:
+            subreddit = ann["subreddit"]
+            if subreddit not in self._subreddit_segs:
+                segmented = ws.segment(ws.clean(subreddit))
+                self._subreddit_segs[subreddit] = ' '.join(segmented)
+            caption = f"{self._subreddit_segs[subreddit]} : {caption}"
+        return self.tokenizer(caption)[0]
+
+
 def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None):
     input_shards = args.train_data if is_train else args.val_data
     assert input_shards is not None
@@ -385,11 +404,20 @@ def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokeni
             # at this point, we have an iterator over the shards assigned to each worker
             wds.tarfile_to_samples(handler=log_and_continue),
         ])
+
+    if args.redcaps_json:
+        text_format = "json"
+        ws.load()
+        preprocess_txt = RedcapsJsonPreprocessor(args.redcaps_prefix_prob, tokenizer)
+    else:
+        text_format = "txt" 
+        preprocess_txt = lambda text: tokenizer(text)[0]
+    
     pipeline.extend([
         wds.select(filter_no_caption_or_no_image),
         wds.decode("pilrgb", handler=log_and_continue),
-        wds.rename(image="jpg;png;jpeg;webp", text="txt"),
-        wds.map_dict(image=preprocess_img, text=lambda text: tokenizer(text)[0]),
+        wds.rename(image="jpg;png;jpeg;webp", text=text_format),
+        wds.map_dict(image=preprocess_img, text=preprocess_txt),
         wds.to_tuple("image", "text"),
         wds.batched(args.batch_size, partial=not is_train)
     ])

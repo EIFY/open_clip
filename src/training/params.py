@@ -454,6 +454,18 @@ def parse_args(args):
         default=0.0,
         help="Entailment loss weight."
     )
+    parser.add_argument(
+        "--redcaps-json",
+        action="store_true",
+        help="Expect Redcaps json caption files in webdataset shards."
+    )
+    parser.add_argument(
+        "--redcaps-prefix-prob",
+        type=float,
+        default=0.5,
+        help="Probability of randomly prefixing subreddit name (word-segmented) "
+        "to the caption for RedCaps instances."
+    )
     args = parser.parse_args(args)
 
     # If some params are not passed, we use the default values based on model name.
