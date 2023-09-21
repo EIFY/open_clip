@@ -449,6 +449,12 @@ def parse_args(args):
         help="Initial logit scale."
     )
     parser.add_argument(
+        "--max-scale",
+        type=float,
+        default=4.605170185988092,
+        help="Maximum logit scale, default to ln(100) as in the original paper."
+    )
+    parser.add_argument(
         "--entailment-weight",
         type=float,
         default=0.0,
