@@ -300,6 +300,7 @@ def create_loss(args):
         use_horovod=args.horovod,
         geometry=args.geometry,
         entailment_weight=args.entailment_weight,
+        K=args.min_radius,
     )
 
 

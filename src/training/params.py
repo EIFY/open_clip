@@ -455,6 +455,12 @@ def parse_args(args):
         help="Entailment loss weight."
     )
     parser.add_argument(
+        "--min-radius",
+        type=float,
+        default=0.1,
+        help="Radius of the epsilon-ball within which aperture is undefined."
+    )
+    parser.add_argument(
         "--redcaps-json",
         action="store_true",
         help="Expect Redcaps json caption files in webdataset shards."
