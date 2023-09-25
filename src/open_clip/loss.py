@@ -94,11 +94,22 @@ def lorentzian_distance(x, y, curvature):
     return -torch.rsqrt(curvature) * torch.acosh(-curvature * (x_space @ y_space.T - torch.outer(x_time, y_time)))
 
 
+def lorentzian_inner(x, y, curvature):
+    # FP32 for exponential map and losses for numerical stability,
+    # per https://arxiv.org/abs/2304.09172
+    x, y, curvature = x.double(), y.double(), curvature.double()
+    x_space, x_time = _exponential_map(x, curvature)
+    y_space, y_time = _exponential_map(y, curvature)
+    return x_space @ y_space.T - torch.outer(x_time, y_time)
+
+
 METRICS = {
     'clip': cosine_similarity,
     'elliptic': nsphere_arc,
     'euclidean': euclidean_distance,
+    'euclidean-inner': cosine_similarity,
     'hyperbolic': lorentzian_distance,
+    'hyperbolic-inner': lorentzian_inner,
 }
 
 
@@ -131,7 +142,9 @@ def hyperbolic_entailment(x, y, curvature, K):
 
 _ENTAILMENT = {
     'euclidean': euclidean_entailment,
-    'hyperbolic': hyperbolic_entailment,    
+    'hyperbolic': hyperbolic_entailment,
+    'euclidean-inner': euclidean_entailment,
+    'hyperbolic-inner': hyperbolic_entailment,    
 }
 
 

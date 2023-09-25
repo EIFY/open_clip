@@ -99,6 +99,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             with autocast():
                 model_out = model(images, texts)
                 logit_scale = model_out["logit_scale"]
+                curvature = model_out["curvature"]
                 if args.distill:
                     with torch.no_grad():
                         dist_model_out = dist_model(images, texts)
@@ -115,6 +116,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 with autocast():
                     model_out = model(images, texts)
                     model_out.pop("logit_scale")
+                    model_out.pop("curvature")
                     for key, val in model_out.items():
                         if key in accum_features:
                             accum_features[key].append(val)
@@ -139,11 +141,12 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 with autocast():
                     model_out = model(images, texts)
                     logit_scale = model_out.pop("logit_scale")
+                    curvature = model_out.pop("curvature")
                     inputs = {}
                     for key, val in accum_features.items():
                         accumulated = accum_features[key]
                         inputs[key] = torch.cat(accumulated[:j] +  [model_out[key]] + accumulated[j + 1:])
-                    losses = loss(**inputs, logit_scale=logit_scale, output_dict=True)
+                    losses = loss(**inputs, logit_scale=logit_scale, curvature=curvature, output_dict=True)
                     del inputs
                     total_loss = sum(losses.values())
                     losses["loss"] = total_loss
@@ -214,6 +217,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 "samples_per_second": samples_per_second,
                 "samples_per_second_per_gpu": samples_per_second_per_gpu,
                 "scale": logit_scale_scalar,
+                "curvature": curvature,
                 "lr": optimizer.param_groups[0]["lr"]
             }            
             log_data.update({name:val.val for name,val in losses_m.items()})
