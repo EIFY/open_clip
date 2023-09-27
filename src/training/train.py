@@ -1,3 +1,4 @@
+import collections
 import json
 import logging
 import math
@@ -38,12 +39,14 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
+
 def postprocess_clip_output(model_out):
     return {
         "image_features": model_out[0],
         "text_features": model_out[1],
         "logit_scale": model_out[2]
     }
+
 
 def unwrap_model(model):
     if hasattr(model, 'module'):
@@ -64,7 +67,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
 
-
     model.train()
     if args.distill:
         dist_model.eval()
@@ -75,7 +77,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
 
     if args.accum_freq > 1:
-        accum_images, accum_texts, accum_features = [], [], {}
+        accum_images, accum_texts, accum_features = [], [], collections.defaultdict(list)
 
     losses_m = {}
     batch_time_m = AverageMeter()
@@ -98,12 +100,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if args.accum_freq == 1:
             with autocast():
                 model_out = model(images, texts)
-                logit_scale = model_out["logit_scale"]
-                curvature = model_out["curvature"]
                 if args.distill:
                     with torch.no_grad():
                         dist_model_out = dist_model(images, texts)
-                    model_out.update({f'dist_{k}' : v for k, v in dist_model_out.items()})
+                    model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
                 losses = loss(**model_out, output_dict=True)
 
                 total_loss = sum(losses.values())
@@ -115,14 +115,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             with torch.no_grad():
                 with autocast():
                     model_out = model(images, texts)
-                    model_out.pop("logit_scale")
-                    model_out.pop("curvature")
-                    for key, val in model_out.items():
-                        if key in accum_features:
-                            accum_features[key].append(val)
-                        else:
-                            accum_features[key] = [val]
-
+                    for key in ("image_features", "text_features"):
+                        accum_features[key].append(model_out[key])
                 accum_images.append(images)
                 accum_texts.append(texts)
 
@@ -140,16 +134,13 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 texts = accum_texts[j]
                 with autocast():
                     model_out = model(images, texts)
-                    logit_scale = model_out.pop("logit_scale")
-                    curvature = model_out.pop("curvature")
-                    inputs = {}
-                    for key, val in accum_features.items():
+                    for key in ("image_features", "text_features"):
                         accumulated = accum_features[key]
-                        inputs[key] = torch.cat(accumulated[:j] +  [model_out[key]] + accumulated[j + 1:])
-                    losses = loss(**inputs, logit_scale=logit_scale, curvature=curvature, output_dict=True)
-                    del inputs
+                        model_out[key] = torch.cat(accumulated[:j] + [model_out[key]] + accumulated[j + 1:])
+                    losses = loss(**model_out, output_dict=True)
                     total_loss = sum(losses.values())
                     losses["loss"] = total_loss
+
                 backward(total_loss, scaler)
 
         if scaler is not None:
@@ -173,10 +164,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
         # reset gradient accum, if enabled
         if args.accum_freq > 1:
-            accum_images, accum_texts, accum_features = [], [], {}
+            accum_images, accum_texts, accum_features = [], [], collections.defaultdict(list)
 
         with torch.no_grad():
-            unwrap_model(model).logit_scale.clamp_(0, args.max_scale)
+            unwrap_model(model).logit_scale.clamp_(0, args.max_logit_scale)
 
         batch_time_m.update(time.time() - end)
         end = time.time()
@@ -193,7 +184,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     losses_m[key] = AverageMeter()
                 losses_m[key].update(val.item(), batch_size)
 
-            logit_scale_scalar = logit_scale.item()
+            logit_scale_scalar = model_out.pop("logit_scale").item()
+            scalar_d = {k: v.item() for k, v in model_out.items() if v is not None and not len(v.shape)}
             loss_log = " ".join(
                 [
                     f"{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})" 
@@ -217,9 +209,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 "samples_per_second": samples_per_second,
                 "samples_per_second_per_gpu": samples_per_second_per_gpu,
                 "scale": logit_scale_scalar,
-                "curvature": curvature,
                 "lr": optimizer.param_groups[0]["lr"]
-            }            
+            } | scalar_d
             log_data.update({name:val.val for name,val in losses_m.items()})
 
             for name, val in log_data.items():

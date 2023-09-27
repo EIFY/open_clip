@@ -1,6 +1,8 @@
 import argparse
 import ast
 
+import numpy as np
+
 
 def get_default_params(model_name):
     # Params from paper (https://arxiv.org/pdf/2103.00020.pdf)
@@ -120,7 +122,7 @@ def parse_args(args):
         help="Optional identifier for the experiment when storing logs. Otherwise use current time.",
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of dataloader workers per GPU."
+        "--workers", type=int, default=4, help="Number of dataloader workers per GPU."
     )
     parser.add_argument(
         "--batch-size", type=int, default=64, help="Batch size per GPU."
@@ -437,22 +439,32 @@ def parse_args(args):
         'Allows int8 training/inference, etc.'
     )
     parser.add_argument(
+        "--siglip",
+        default=False,
+        action="store_true",
+        help='Use SigLip (sigmoid) loss.'
+    )
+    parser.add_argument(
+        "--init-logit-scale",
+        type=float,
+        help="Initial logit scale."
+    )
+    parser.add_argument(
+        "--max-logit-scale",
+        type=float,
+        default=np.log(100),
+        help="Maximum logit scale, default to ln(100) as in the original paper."
+    )
+    parser.add_argument(
+        "--init-logit-bias",
+        type=float,
+        help="Initial logit bias."
+    )
+    parser.add_argument(
         "--geometry",
         choices=['clip', 'elliptic', 'euclidean', 'hyperbolic', 'euclidean-inner', 'hyperbolic-inner'],
         default='clip',
         help='Geometry of the embedding space.'
-    )
-    parser.add_argument(
-        "--init-scale",
-        type=float,
-        default=2.659260036932778,  # np.log(1 / 0.07)
-        help="Initial logit scale."
-    )
-    parser.add_argument(
-        "--max-scale",
-        type=float,
-        default=4.605170185988092,
-        help="Maximum logit scale, default to ln(100) as in the original paper."
     )
     parser.add_argument(
         "--entailment-weight",

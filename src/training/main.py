@@ -215,6 +215,21 @@ def main(args):
         # arg is nargs, single (square) image size list -> int
         args.force_image_size = args.force_image_size[0]
     random_seed(args.seed, 0)
+    model_kwargs = {
+        'init_logit_scale': args.init_logit_scale,
+        'init_logit_bias': args.init_logit_bias,
+        'geometry': args.geometry,
+    }
+    if args.siglip:
+        default_logit_scale = np.log(10) # different from CLIP
+        if args.init_logit_bias is None:
+            effective_batch_size = args.batch_size * args.world_size * args.accum_freq
+            model_kwargs['init_logit_bias'] = np.log(1 / (effective_batch_size - 1))
+    else:
+        default_logit_scale = np.log(1 / 0.07)
+    if args.init_logit_scale is None:
+        model_kwargs['init_logit_scale'] = default_logit_scale
+
     model, preprocess_train, preprocess_val = create_model_and_transforms(
         args.model,
         args.pretrained,
@@ -230,8 +245,7 @@ def main(args):
         image_std=args.image_std,
         aug_cfg=args.aug_cfg,
         output_dict=True,
-        geometry=args.geometry,
-        init_scale=args.init_scale,
+        **model_kwargs,
     )
     if args.distill:
         # FIXME: currently assumes the model you're distilling from has the same tokenizer & transforms.

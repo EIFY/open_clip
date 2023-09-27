@@ -32,7 +32,7 @@ def run(model, classifier, dataloader, args):
                 if isinstance(output, dict):
                     image_features, curvature = output['image_features'], output['curvature']
                 else:
-                    image_features, _, _, curvature = output
+                    image_features, _,  _, _, curvature = output
                 logits = 100. * metric(image_features, classifier, curvature)
 
             # measure accuracy
