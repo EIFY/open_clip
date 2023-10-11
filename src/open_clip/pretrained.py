@@ -84,6 +84,8 @@ _VITB32 = dict(
     laion2b_e16=_pcfg(
         "https://github.com/mlfoundations/open_clip/releases/download/v0.2-weights/vit_b_32-laion2b_e16-af8dbd0c.pth"),
     laion2b_s34b_b79k=_pcfg(hf_hub='laion/CLIP-ViT-B-32-laion2B-s34B-b79K/'),
+    # DataComp-XL models
+    datacomp_xl_s13b_b90k=_pcfg(hf_hub='laion/CLIP-ViT-B-32-DataComp.XL-s13B-b90K/'),
     # DataComp-M models
     datacomp_m_s128m_b4k=_pcfg(hf_hub='laion/CLIP-ViT-B-32-DataComp.M-s128M-b4K/'),
     commonpool_m_clip_s128m_b4k=_pcfg(hf_hub='laion/CLIP-ViT-B-32-CommonPool.M.clip-s128M-b4K/'),
@@ -111,6 +113,10 @@ _VITB32_quickgelu = dict(
         "https://github.com/mlfoundations/open_clip/releases/download/v0.2-weights/vit_b_32-quickgelu-laion400m_e32-46683a32.pt"),
 )
 
+_VITB32_256 = dict(
+    datacomp_s34b_b86k=_pcfg(hf_hub='laion/CLIP-ViT-B-32-256x256-DataComp-s34B-b86K/'),
+)
+
 _VITB16 = dict(
     openai=_pcfg(
         "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt"),
@@ -119,6 +125,8 @@ _VITB16 = dict(
     laion400m_e32=_pcfg(
         "https://github.com/mlfoundations/open_clip/releases/download/v0.2-weights/vit_b_16-laion400m_e32-55e67d44.pt"),
     laion2b_s34b_b88k=_pcfg(hf_hub='laion/CLIP-ViT-B-16-laion2B-s34B-b88K/'),
+    # DataComp-XL models
+    datacomp_xl_s13b_b90k=_pcfg(hf_hub='laion/CLIP-ViT-B-16-DataComp.XL-s13B-b90K/'),
     # DataComp-L models
     datacomp_l_s1b_b8k=_pcfg(hf_hub='laion/CLIP-ViT-B-16-DataComp.L-s1B-b8K/'),
     commonpool_l_clip_s1b_b8k=_pcfg(hf_hub='laion/CLIP-ViT-B-16-CommonPool.L.clip-s1B-b8K/'),
@@ -233,6 +241,7 @@ _PRETRAINED = {
     "RN50x16": _RN50x16,
     "RN50x64": _RN50x64,
     "ViT-B-32": _VITB32,
+    "ViT-B-32-256": _VITB32_256,
     "ViT-B-32-quickgelu": _VITB32_quickgelu,
     "ViT-B-16": _VITB16,
     "ViT-B-16-plus-240": _VITB16_PLUS_240,
@@ -279,6 +288,12 @@ _PRETRAINED = {
     "EVA02-E-14-plus": dict(
         # from QuanSun/EVA-CLIP/EVA02_CLIP_E_psz14_plus_s9B.pt
         laion2b_s9b_b144k=_pcfg(hf_hub='timm/eva02_enormous_patch14_plus_clip_224.laion2b_s9b_b144k/'),
+    ),
+    "nllb-clip-base": dict(
+        v1=_pcfg(hf_hub='visheratin/nllb-clip-base-oc/'),
+    ),
+    "nllb-clip-large": dict(
+        v1=_pcfg(hf_hub='visheratin/nllb-clip-large-oc/'),
     )
 }
 
