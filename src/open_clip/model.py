@@ -221,10 +221,11 @@ class CLIP(nn.Module):
         self.geometry = geometry
         self.normalize = geometry in ('elliptic', 'clip')
         self.dim_scale = np.sqrt(1 / embed_dim)
-        if geometry.startswith('hyperbolic'):
+        if geometry.startswith('hyperbolic') or geometry.startswith('euclidean'):
             self.alpha_img = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.alpha_txt = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
-            self.curvature = nn.Parameter(torch.zeros([]))
+            if geometry.startswith('hyperbolic'):
+                self.curvature = nn.Parameter(torch.zeros([]))
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
         # lock image tower as per LiT - https://arxiv.org/abs/2111.07991
@@ -262,12 +263,11 @@ class CLIP(nn.Module):
         logit_bias = self.logit_bias
         curvature = None
 
-        if self.geometry.startswith('euclidean'):
-            dim_scale_img = dim_scale_txt = self.dim_scale
-        elif self.geometry.startswith('hyperbolic'):
+        if self.geometry.startswith('hyperbolic') or self.geometry.startswith('euclidean'):
             dim_scale_img = self.alpha_img.exp()
             dim_scale_txt = self.alpha_txt.exp()
-            curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
+            if self.geometry.startswith('hyperbolic'):
+                curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
         else:
             dim_scale_img = dim_scale_txt = 1.
             
