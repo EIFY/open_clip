@@ -467,6 +467,13 @@ def parse_args(args):
         help='Geometry of the embedding space.'
     )
     parser.add_argument(
+        "--metric-weights",
+        type=float,
+        nargs=3,
+        default=None,
+        help='Linear combination weights of metrics.'
+    )
+    parser.add_argument(
         "--entailment-weight",
         type=float,
         default=0.0,

@@ -1,10 +1,11 @@
+import functools
 import logging
 
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from open_clip import get_input_dtype, get_tokenizer, build_zero_shot_classifier, \
+from open_clip import get_input_dtype, get_tokenizer, build_zero_shot_classifier, mixed_metric, \
     METRICS, IMAGENET_CLASSNAMES, OPENAI_IMAGENET_TEMPLATES
 from .precision import get_autocast
 
@@ -18,7 +19,10 @@ def accuracy(output, target, topk=(1,)):
 def run(model, classifier, dataloader, args):
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
-    metric = METRICS[args.geometry]
+    if args.metric_weights:
+        metric = functools.partial(mixed_metric, metric_weights=args.metric_weights)
+    else:
+        metric = METRICS[args.geometry]
 
     with torch.no_grad():
         top1, top5, n = 0., 0., 0.

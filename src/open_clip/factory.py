@@ -290,6 +290,7 @@ def create_loss(args):
             geometry=args.geometry,
             entailment_weight=args.entailment_weight,
             K=args.min_radius,
+            metric_weights=args.metric_weights,
         )
     elif "coca" in args.model.lower():
         return CoCaLoss(
@@ -304,6 +305,7 @@ def create_loss(args):
             geometry=args.geometry,
             entailment_weight=args.entailment_weight,
             K=args.min_radius,
+            metric_weights=args.metric_weights,
         )
     elif args.siglip:
         assert not args.horovod, "Horovod not currently supported for SigLip"
@@ -313,6 +315,7 @@ def create_loss(args):
             geometry=args.geometry,
             entailment_weight=args.entailment_weight,
             K=args.min_radius,
+            metric_weights=args.metric_weights,
         )
     return ClipLoss(
         local_loss=args.local_loss,
@@ -324,6 +327,7 @@ def create_loss(args):
         geometry=args.geometry,
         entailment_weight=args.entailment_weight,
         K=args.min_radius,
+        metric_weights=args.metric_weights,
     )
 
 

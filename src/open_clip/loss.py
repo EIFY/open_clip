@@ -1,3 +1,5 @@
+import functools
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -113,6 +115,17 @@ METRICS = {
 }
 
 
+def mixed_metric(x, y, curvature, metric_weights):
+    losses = []
+    if metric_weights[0]:
+        losses.append(nsphere_arc(F.normalize(x), F.normalize(y), None) * metric_weights[0])
+    if metric_weights[1]:
+        losses.append(euclidean_distance(x, y, None) * metric_weights[1])
+    if metric_weights[2]:
+        losses.append(lorentzian_distance(x, y, curvature) * metric_weights[2])
+    return sum(losses)
+
+
 def euclidean_entailment(x, y, _, K):
     # https://arxiv.org/abs/1804.01882
     y_x = y - x
@@ -161,6 +174,7 @@ class ClipLoss(nn.Module):
             geometry='clip',
             entailment_weight=0.0,
             K=0.1,
+            metric_weights=None,
     ):
         super().__init__()
         self.local_loss = local_loss
@@ -169,7 +183,10 @@ class ClipLoss(nn.Module):
         self.rank = rank
         self.world_size = world_size
         self.use_horovod = use_horovod
-        self.metric = METRICS[geometry]
+        if metric_weights:
+            self.metric = functools.partial(mixed_metric, metric_weights=metric_weights)
+        else:
+            self.metric = METRICS[geometry]
         if geometry in _ENTAILMENT:
             self.entailment = _ENTAILMENT[geometry]
             self.entailment_weight = entailment_weight
@@ -247,6 +264,7 @@ class CoCaLoss(ClipLoss):
             geometry='clip',
             entailment_weight=0.0,
             K=0.1,
+            metric_weights=None,
     ):
         super().__init__(
             local_loss=local_loss,
@@ -258,6 +276,7 @@ class CoCaLoss(ClipLoss):
             geometry=geometry,
             entailment_weight=entailment_weight,
             K=K,
+            metric_weights=metric_weights,
         )
 
         self.clip_loss_weight = clip_loss_weight
@@ -446,6 +465,7 @@ class SigLipLoss(nn.Module):
             geometry='clip',
             entailment_weight=0.0,
             K=0.1,
+            metric_weights=None,
     ):
         super().__init__()
         self.cache_labels = cache_labels
@@ -454,7 +474,10 @@ class SigLipLoss(nn.Module):
         assert not use_horovod  # FIXME need to look at hvd ops for ring transfers
         self.use_horovod = use_horovod
         self.bidir = bidir
-        self.metric = METRICS[geometry]
+        if metric_weights:
+            self.metric = functools.partial(mixed_metric, metric_weights=metric_weights)
+        else:
+            self.metric = METRICS[geometry]
         if geometry in _ENTAILMENT:
             self.entailment = _ENTAILMENT[geometry]
             self.entailment_weight = entailment_weight
