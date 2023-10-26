@@ -222,8 +222,6 @@ class CLIP(nn.Module):
         self.normalize = geometry in ('elliptic', 'clip')
         self.dim_scale = np.sqrt(1 / embed_dim)
         if geometry.startswith('hyperbolic'):
-            self.alpha_img = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
-            self.alpha_txt = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.curvature = nn.Parameter(torch.zeros([]))
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
@@ -265,8 +263,7 @@ class CLIP(nn.Module):
         if self.geometry.startswith('euclidean'):
             dim_scale_img = dim_scale_txt = self.dim_scale
         elif self.geometry.startswith('hyperbolic'):
-            dim_scale_img = self.alpha_img.exp()
-            dim_scale_txt = self.alpha_txt.exp()
+            dim_scale_img = dim_scale_txt = self.dim_scale
             curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
         else:
             dim_scale_img = dim_scale_txt = 1.
