@@ -166,9 +166,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if args.accum_freq > 1:
             accum_images, accum_texts, accum_features = [], [], collections.defaultdict(list)
 
-        with torch.no_grad():
-            unwrap_model(model).logit_scale.clamp_(0, args.max_logit_scale)
-
         batch_time_m.update(time.time() - end)
         end = time.time()
         batch_count = i_accum + 1
@@ -184,7 +181,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     losses_m[key] = AverageMeter()
                 losses_m[key].update(val.item(), batch_size)
 
-            logit_scale_scalar = model_out.pop("logit_scale").item()
+            prefixes = ['', 'eu-', 'hyper-']
+            logit_scale = model_out.pop("logit_scale")
+            logit_scale_d = {prefix + 'scale': scalar.item() for prefix, scalar in zip(prefixes, logit_scale) if scalar is not None}
+
             scalar_d = {k: v.item() for k, v in model_out.items() if v is not None and not len(v.shape)}
             loss_log = " ".join(
                 [
@@ -198,8 +198,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/gpu "
-                f"LR: {optimizer.param_groups[0]['lr']:5f} "
-                f"Logit Scale: {logit_scale_scalar:.3f} " + loss_log
+                f"LR: {optimizer.param_groups[0]['lr']:5f} " + loss_log
             )
 
             # Save train loss / etc. Using non avg meter values as loggers have their own smoothing
@@ -208,9 +207,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 "batch_time": batch_time_m.val,
                 "samples_per_second": samples_per_second,
                 "samples_per_second_per_gpu": samples_per_second_per_gpu,
-                "scale": logit_scale_scalar,
                 "lr": optimizer.param_groups[0]["lr"]
-            } | scalar_d
+            } | scalar_d | logit_scale_d
             log_data.update({name:val.val for name,val in losses_m.items()})
 
             log_data = {"train/" + name: val for name, val in log_data.items()}

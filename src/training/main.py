@@ -216,6 +216,7 @@ def main(args):
         args.force_image_size = args.force_image_size[0]
     random_seed(args.seed, 0)
     model_kwargs = {
+        'max_logit_scale': args.max_logit_scale,
         'init_logit_scale': args.init_logit_scale,
         'init_logit_bias': args.init_logit_bias,
         'geometry': args.geometry,
@@ -228,7 +229,7 @@ def main(args):
     else:
         default_logit_scale = np.log(1 / 0.07)
     if args.init_logit_scale is None:
-        model_kwargs['init_logit_scale'] = default_logit_scale
+        model_kwargs['init_logit_scale'] = [default_logit_scale]
 
     model, preprocess_train, preprocess_val = create_model_and_transforms(
         args.model,

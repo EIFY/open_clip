@@ -1,5 +1,6 @@
 import argparse
 import ast
+import itertools
 
 import numpy as np
 
@@ -447,6 +448,8 @@ def parse_args(args):
     parser.add_argument(
         "--init-logit-scale",
         type=float,
+        nargs='*',
+        default=None,
         help="Initial logit scale."
     )
     parser.add_argument(
@@ -460,9 +463,10 @@ def parse_args(args):
         type=float,
         help="Initial logit bias."
     )
+    geometry_comb = ['-'.join(comb) for r in range(1, 4) for comb in itertools.combinations(('elliptic', 'euclidean', 'hyperbolic'), r)]
     parser.add_argument(
         "--geometry",
-        choices=['clip', 'elliptic', 'euclidean', 'hyperbolic', 'euclidean-inner', 'hyperbolic-inner'],
+        choices=['clip', 'euclidean-inner', 'hyperbolic-inner'] + geometry_comb,
         default='clip',
         help='Geometry of the embedding space.'
     )

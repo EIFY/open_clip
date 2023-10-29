@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from open_clip import get_input_dtype, get_tokenizer, build_zero_shot_classifier, \
+from open_clip import get_input_dtype, get_tokenizer, build_zero_shot_classifier, adaptive_distance, \
     METRICS, IMAGENET_CLASSNAMES, OPENAI_IMAGENET_TEMPLATES
 from .precision import get_autocast
 
@@ -18,7 +18,7 @@ def accuracy(output, target, topk=(1,)):
 def run(model, classifier, dataloader, args):
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
-    metric = METRICS[args.geometry]
+    metric = METRICS.get(args.geometry, adaptive_distance)
 
     with torch.no_grad():
         top1, top5, n = 0., 0., 0.
@@ -30,10 +30,10 @@ def run(model, classifier, dataloader, args):
                 # predict
                 output = model(image=images)
                 if isinstance(output, dict):
-                    image_features, curvature = output['image_features'], output['curvature']
+                    image_features, logit_scale, curvature = output['image_features'], output['logit_scale'], output['curvature']
                 else:
-                    image_features, _,  _, _, curvature = output
-                logits = 100. * metric(image_features, classifier, curvature)
+                    image_features, _, logit_scale, _, curvature = output
+                logits = metric(logit_scale, image_features, classifier, curvature)
 
             # measure accuracy
             acc1, acc5 = accuracy(logits, target, topk=(1, 5))

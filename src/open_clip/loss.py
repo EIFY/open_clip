@@ -1,3 +1,5 @@
+import functools
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -63,19 +65,19 @@ def gather_features(
     return all_image_features, all_text_features
 
 
-def cosine_similarity(x, y, _):
-    return x @ y.T
+def cosine_similarity(logit_scale, x, y, _, index=0):
+    return logit_scale[index] * x @ y.T
 
 
-def nsphere_arc(x, y, _):
-    return -torch.acos(x @ y.T)
+def nsphere_arc(logit_scale, x, y, _):
+    return -logit_scale[0] * torch.acos(x @ y.T)
 
 
-def euclidean_distance(x, y, _):
+def euclidean_distance(logit_scale, x, y, _):
     x = x.unsqueeze(1)
     y = y.unsqueeze(0)
     squared = (x - y) ** 2
-    return -squared.sum(-1).sqrt()
+    return -logit_scale[1] * squared.sum(-1).sqrt()
 
 
 def _exponential_map(x, curvature):
@@ -85,29 +87,40 @@ def _exponential_map(x, curvature):
     return x_space, x_time
 
 
-def lorentzian_distance(x, y, curvature):
+def lorentzian_distance(logit_scale, x, y, curvature):
     # FP32 for exponential map and losses for numerical stability,
     # per https://arxiv.org/abs/2304.09172
     x, y, curvature = x.double(), y.double(), curvature.double()
     x_space, x_time = _exponential_map(x, curvature)
     y_space, y_time = _exponential_map(y, curvature)
-    return -torch.rsqrt(curvature) * torch.acosh(-curvature * (x_space @ y_space.T - torch.outer(x_time, y_time)))
+    return -logit_scale[2] * torch.rsqrt(curvature) * torch.acosh(-curvature * (x_space @ y_space.T - torch.outer(x_time, y_time)))
 
 
-def lorentzian_inner(x, y, curvature):
+def lorentzian_inner(logit_scale, x, y, curvature):
     # FP32 for exponential map and losses for numerical stability,
     # per https://arxiv.org/abs/2304.09172
     x, y, curvature = x.double(), y.double(), curvature.double()
     x_space, x_time = _exponential_map(x, curvature)
     y_space, y_time = _exponential_map(y, curvature)
-    return x_space @ y_space.T - torch.outer(x_time, y_time)
+    return logit_scale[2] * (x_space @ y_space.T - torch.outer(x_time, y_time))
+
+
+def adaptive_distance(logit_scale, x, y, curvature):
+    losses = []
+    if logit_scale[0] is not None:
+        losses.append(nsphere_arc(logit_scale, F.normalize(x), F.normalize(y), None))
+    if logit_scale[1] is not None:
+        losses.append(euclidean_distance(logit_scale, x, y, None))
+    if logit_scale[2] is not None:
+        losses.append(lorentzian_distance(logit_scale, x, y, curvature))
+    return sum(losses)
 
 
 METRICS = {
     'clip': cosine_similarity,
     'elliptic': nsphere_arc,
     'euclidean': euclidean_distance,
-    'euclidean-inner': cosine_similarity,
+    'euclidean-inner': functools.partial(cosine_similarity, index=1),
     'hyperbolic': lorentzian_distance,
     'hyperbolic-inner': lorentzian_inner,
 }
@@ -169,7 +182,7 @@ class ClipLoss(nn.Module):
         self.rank = rank
         self.world_size = world_size
         self.use_horovod = use_horovod
-        self.metric = METRICS[geometry]
+        self.metric = METRICS.get(geometry, adaptive_distance)
         if geometry in _ENTAILMENT:
             self.entailment = _ENTAILMENT[geometry]
             self.entailment_weight = entailment_weight
@@ -200,13 +213,13 @@ class ClipLoss(nn.Module):
                 self.local_loss, self.gather_with_grad, self.rank, self.world_size, self.use_horovod)
 
             if self.local_loss:
-                logits_per_image = logit_scale * self.metric(image_features, all_text_features, curvature)
-                logits_per_text = logit_scale * self.metric(text_features, all_image_features, curvature)
+                logits_per_image = self.metric(logit_scale, image_features, all_text_features, curvature)
+                logits_per_text = self.metric(logit_scale, text_features, all_image_features, curvature)
             else:
-                logits_per_image = logit_scale * self.metric(all_image_features, all_text_features, curvature)
+                logits_per_image = self.metric(logit_scale, all_image_features, all_text_features, curvature)
                 logits_per_text = logits_per_image.T
         else:
-            logits_per_image = logit_scale * self.metric(image_features, text_features, curvature)
+            logits_per_image = self.metric(logit_scale, image_features, text_features, curvature)
             logits_per_text = logits_per_image.T
         
         return logits_per_image, logits_per_text
@@ -472,7 +485,7 @@ class SigLipLoss(nn.Module):
         return labels
 
     def get_logits(self, image_features, text_features, logit_scale, logit_bias=None, curvature=None):
-        logits = logit_scale * self.metric(image_features, text_features, curvature)
+        logits = self.metric(logit_scale, image_features, text_features, curvature)
         if logit_bias is not None:
             logits += logit_bias
         return logits
