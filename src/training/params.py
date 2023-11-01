@@ -471,6 +471,12 @@ def parse_args(args):
         help='Geometry of the embedding space.'
     )
     parser.add_argument(
+        "--scalar-lr-multiplier",
+        type=float,
+        default=1.0,
+        help="Multiplier for scalar (e.g. logit_scale) learning rate."
+    )
+    parser.add_argument(
         "--entailment-weight",
         type=float,
         default=0.0,
