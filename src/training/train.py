@@ -181,9 +181,17 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     losses_m[key] = AverageMeter()
                 losses_m[key].update(val.item(), batch_size)
 
-            prefixes = ['', 'eu-', 'hyper-']
             logit_scale = model_out.pop("logit_scale")
-            logit_scale_d = {prefix + 'scale': scalar.item() for prefix, scalar in zip(prefixes, logit_scale) if scalar is not None}
+            if args.geometry == 'mahalanobis':
+                eigenvalues, _ = torch.linalg.eig(model.ma_logit_scale @ model.ma_logit_scale.T)
+                eigenvalues = [e.real for e in eigenvalues.sqrt().tolist()]
+                logit_scale_d = {}
+                logit_scale_d['ma_scale_min'] = np.min(eigenvalues)
+                logit_scale_d['ma_scale_max'] = np.max(eigenvalues)
+                logit_scale_d['ma_scale_mean'] = np.mean(eigenvalues)
+            else:
+                prefixes = ['', 'eu-', 'hyper-']
+                logit_scale_d = {prefix + 'scale': scalar.item() for prefix, scalar in zip(prefixes, logit_scale) if scalar is not None}
 
             scalar_d = {k: v.item() for k, v in model_out.items() if v is not None and not len(v.shape)}
             loss_log = " ".join(

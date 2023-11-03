@@ -466,7 +466,7 @@ def parse_args(args):
     geometry_comb = ['-'.join(comb) for r in range(1, 4) for comb in itertools.combinations(('elliptic', 'euclidean', 'hyperbolic'), r)]
     parser.add_argument(
         "--geometry",
-        choices=['clip', 'euclidean-inner', 'hyperbolic-inner'] + geometry_comb,
+        choices=['clip', 'euclidean-inner', 'hyperbolic-inner', 'mahalanobis'] + geometry_comb,
         default='clip',
         help='Geometry of the embedding space.'
     )

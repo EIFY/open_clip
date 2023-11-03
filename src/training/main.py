@@ -317,7 +317,7 @@ def main(args):
     if args.train_data or args.dataset_type == "synthetic":
         assert not args.trace, 'Cannot train with traced model'
 
-        is_scalar = lambda n, p: not p.ndim  # logit_scale, curvature, etc.
+        is_scalar = lambda n, p: not p.ndim or 'logit_scale' in n  # logit_scale, curvature, etc.
         exclude = lambda n, p: not is_scalar(n, p) and (p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n)
         include = lambda n, p: not exclude(n, p) and not is_scalar(n, p)
 

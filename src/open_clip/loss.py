@@ -123,6 +123,7 @@ METRICS = {
     'euclidean-inner': functools.partial(cosine_similarity, index=1),
     'hyperbolic': lorentzian_distance,
     'hyperbolic-inner': lorentzian_inner,
+    'mahalanobis': euclidean_distance,
 }
 
 

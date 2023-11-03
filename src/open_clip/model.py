@@ -215,7 +215,7 @@ class CLIP(nn.Module):
         self.text_projection = text.text_projection
         self.register_buffer('attn_mask', text.attn_mask, persistent=False)
         self.max_logit_scale = max_logit_scale
-        self.logit_scale = self.eu_logit_scale = self.hyper_logit_scale = None
+        self.logit_scale = self.eu_logit_scale = self.hyper_logit_scale = self.ma_logit_scale = None
         self.geometry = geometry
         self.normalize = True
         self.dim_scale = np.sqrt(1 / embed_dim)
@@ -233,6 +233,10 @@ class CLIP(nn.Module):
             self.alpha_img = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.alpha_txt = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.curvature = nn.Parameter(torch.zeros([]))
+        if self.geometry == 'mahalanobis':
+            self.normalize = False
+            self.eu_logit_scale = torch.zeros([])
+            self.ma_logit_scale = nn.Parameter(torch.eye(embed_dim) * np.exp(next(init_logit_scale_it, np.log(1 / 0.07))))
 
         if init_logit_bias is not None:
             self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
@@ -276,17 +280,21 @@ class CLIP(nn.Module):
         logit_bias = self.logit_bias
         curvature = None
 
-        if 'hyperbolic' in self.geometry:
-            dim_scale_img = self.alpha_img.exp()
-            dim_scale_txt = self.alpha_txt.exp()
-            curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
-        elif 'euclidean' in self.geometry:
-            dim_scale_img = dim_scale_txt = self.dim_scale
+        if self.geometry == 'mahalanobis':
+            image_features = self.dim_scale * self.encode_image(image, normalize=self.normalize) @ self.ma_logit_scale if image is not None else None
+            text_features = self.dim_scale * self.encode_text(text, normalize=self.normalize) @ self.ma_logit_scale if text is not None else None
         else:
-            dim_scale_img = dim_scale_txt = 1.
-            
-        image_features = dim_scale_img * self.encode_image(image, normalize=self.normalize) if image is not None else None
-        text_features = dim_scale_txt * self.encode_text(text, normalize=self.normalize) if text is not None else None
+            if 'hyperbolic' in self.geometry:
+                dim_scale_img = self.alpha_img.exp()
+                dim_scale_txt = self.alpha_txt.exp()
+                curvature = torch.clamp(self.curvature.exp(), min=0.1, max=10.)
+            elif 'euclidean' in self.geometry:
+                dim_scale_img = dim_scale_txt = self.dim_scale
+            else:
+                dim_scale_img = dim_scale_txt = 1.
+
+            image_features = dim_scale_img * self.encode_image(image, normalize=self.normalize) if image is not None else None
+            text_features = dim_scale_txt * self.encode_text(text, normalize=self.normalize) if text is not None else None
 
         if self.output_dict:
             return {
