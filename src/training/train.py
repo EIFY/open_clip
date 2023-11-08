@@ -186,6 +186,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             logit_scale_d = {prefix + 'scale': scalar.item() for prefix, scalar in zip(prefixes, logit_scale) if scalar is not None}
 
             scalar_d = {k: v.item() for k, v in model_out.items() if v is not None and not len(v.shape)}
+            if args.norm_power:
+                for p in ('norm_power_txt', 'norm_power_img'):
+                    scalar_d[p] = getattr(model, p).item()
             loss_log = " ".join(
                 [
                     f"{loss_name.capitalize()}: {loss_m.val:#.5g} ({loss_m.avg:#.5g})" 

@@ -220,6 +220,7 @@ def main(args):
         'init_logit_scale': args.init_logit_scale,
         'init_logit_bias': args.init_logit_bias,
         'geometry': args.geometry,
+        'norm_power': args.norm_power,
     }
     if args.siglip:
         default_logit_scale = np.log(10) # different from CLIP

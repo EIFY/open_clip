@@ -477,6 +477,11 @@ def parse_args(args):
         help="Multiplier for scalar (e.g. logit_scale) learning rate."
     )
     parser.add_argument(
+        "--norm-power",
+        action="store_true",
+        help="Scale the image and text embeddings with an arbitrary power of the norm."
+    )
+    parser.add_argument(
         "--entailment-weight",
         type=float,
         default=0.0,

@@ -198,6 +198,7 @@ class CLIP(nn.Module):
             init_logit_scale = [np.log(1 / 0.07)],
             init_logit_bias: Optional[float] = None,
             geometry: str = 'clip',
+            norm_power: bool = False,
             cast_dtype: Optional[torch.dtype] = None,
             output_dict: bool = False,
     ):
@@ -233,6 +234,10 @@ class CLIP(nn.Module):
             self.alpha_img = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.alpha_txt = nn.Parameter(np.log(self.dim_scale) * torch.ones([]))
             self.curvature = nn.Parameter(torch.zeros([]))
+        self.norm_power = norm_power
+        if self.norm_power:
+            self.norm_power_img = nn.Parameter(torch.zeros([]))
+            self.norm_power_txt = nn.Parameter(torch.zeros([]))
 
         if init_logit_bias is not None:
             self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
@@ -250,7 +255,7 @@ class CLIP(nn.Module):
 
     def encode_image(self, image, normalize: bool = False):
         features = self.visual(image)
-        return F.normalize(features, dim=-1) if normalize else features
+        return F.normalize(features, dim=-1) if normalize else (features * torch.pow(features.norm(dim=1, keepdim=True), self.norm_power_img) if self.norm_power else features)
 
     def encode_text(self, text, normalize: bool = False):
         cast_dtype = self.transformer.get_cast_dtype()
@@ -264,7 +269,7 @@ class CLIP(nn.Module):
         x = self.ln_final(x)  # [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
         x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
-        return F.normalize(x, dim=-1) if normalize else x
+        return F.normalize(x, dim=-1) if normalize else (x * torch.pow(x.norm(dim=1, keepdim=True), self.norm_power_txt) if self.norm_power else x)
 
     def forward(
             self,
@@ -284,7 +289,7 @@ class CLIP(nn.Module):
             dim_scale_img = dim_scale_txt = self.dim_scale
         else:
             dim_scale_img = dim_scale_txt = 1.
-            
+
         image_features = dim_scale_img * self.encode_image(image, normalize=self.normalize) if image is not None else None
         text_features = dim_scale_txt * self.encode_text(text, normalize=self.normalize) if text is not None else None
 
