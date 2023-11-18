@@ -72,10 +72,10 @@ def nsphere_arc(x, y, _):
 
 
 def euclidean_distance(x, y, _):
-    x = x.unsqueeze(1)
-    y = y.unsqueeze(0)
-    squared = (x - y) ** 2
-    return -squared.sum(-1).sqrt()
+    x_sq = x.square().sum(-1, keepdim=True)
+    y_sq = y.square().sum(-1, keepdim=True)
+    squared = x_sq - 2 * x @ y.T + y_sq.T
+    return -squared.sqrt()
 
 
 def _exponential_map(x, curvature):
