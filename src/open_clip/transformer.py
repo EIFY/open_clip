@@ -343,7 +343,8 @@ class VisionTransformer(nn.Module):
             input_patchnorm: bool = False,
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
-            output_tokens: bool = False
+            output_tokens: bool = False,
+            final_layernorm: bool = True,
     ):
         super().__init__()
         self.output_tokens = output_tokens
@@ -385,11 +386,11 @@ class VisionTransformer(nn.Module):
         self.global_average_pool = global_average_pool
         if attentional_pool:
             self.attn_pool = AttentionalPooler(output_dim, width, n_head=attn_pooler_heads, n_queries=n_queries)
-            self.ln_post = norm_layer(output_dim)
+            self.ln_post = norm_layer(output_dim) if final_layernorm else lambda x: x
             self.proj = nn.Parameter(scale * torch.randn(output_dim, output_dim))
         else:
             self.attn_pool = None
-            self.ln_post = norm_layer(width)
+            self.ln_post = norm_layer(width) if final_layernorm else lambda x: x
             self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
 
         self.init_parameters()
@@ -520,6 +521,7 @@ class TextTransformer(nn.Module):
             embed_cls: bool = False,
             pad_id: int = 0,
             output_tokens: bool = False,
+            final_layernorm: bool = True,
     ):
         super().__init__()
         self.output_tokens = output_tokens
@@ -548,7 +550,7 @@ class TextTransformer(nn.Module):
             act_layer=act_layer,
             norm_layer=norm_layer,
         )
-        self.ln_final = norm_layer(width)
+        self.ln_final = norm_layer(width) if final_layernorm else lambda x: x
 
         self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
 

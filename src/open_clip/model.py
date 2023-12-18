@@ -28,6 +28,7 @@ class CLIPVisionCfg:
     mlp_ratio: float = 4.0
     patch_size: int = 16
     image_size: Union[Tuple[int, int], int] = 224
+    final_layernorm: bool = True
 
     ls_init_value: Optional[float] = None  # layer scale initial value
     patch_dropout: float = 0.  # what fraction of patches to dropout during training (0 would mean disabled and no patches dropped) - 0.5 to 0.75 recommended in the paper for optimal results
@@ -64,6 +65,7 @@ class CLIPTextCfg:
     pad_id: int = 0
     output_tokens: bool = False
     text_mask: str = 'first' # default first truncate in bpe_tokenizer
+    final_layernorm: bool = True
 
 
 def get_cast_dtype(precision: str):
@@ -141,6 +143,7 @@ def _build_vision_tower(
             output_dim=embed_dim,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            final_layernorm=vision_cfg.final_layernorm,
         )
 
     return visual
@@ -181,6 +184,7 @@ def _build_text_tower(
             pad_id=text_cfg.pad_id,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            final_layernorm=text_cfg.final_layernorm,
         )
     return text
 
