@@ -78,6 +78,13 @@ def euclidean_distance(x, y, _):
     return -squared.sqrt()
 
 
+def euclidean_squared(x, y, _):
+    x_sq = x.square().sum(-1, keepdim=True)
+    y_sq = y.square().sum(-1, keepdim=True)
+    squared = x_sq - 2 * x @ y.T + y_sq.T
+    return -squared
+
+
 def _exponential_map(x, curvature):
     c_sqrt_norm = torch.sqrt(curvature) * x.norm(dim=1, keepdim=True)
     x_space = torch.sinh(c_sqrt_norm) / c_sqrt_norm * x
@@ -108,6 +115,7 @@ METRICS = {
     'elliptic': nsphere_arc,
     'euclidean': euclidean_distance,
     'euclidean-inner': cosine_similarity,
+    'euclidean-squared': euclidean_squared,
     'hyperbolic': lorentzian_distance,
     'hyperbolic-inner': lorentzian_inner,
 }
@@ -143,8 +151,6 @@ def hyperbolic_entailment(x, y, curvature, K):
 _ENTAILMENT = {
     'euclidean': euclidean_entailment,
     'hyperbolic': hyperbolic_entailment,
-    'euclidean-inner': euclidean_entailment,
-    'hyperbolic-inner': hyperbolic_entailment,    
 }
 
 
@@ -170,8 +176,9 @@ class ClipLoss(nn.Module):
         self.world_size = world_size
         self.use_horovod = use_horovod
         self.metric = METRICS[geometry]
-        if geometry in _ENTAILMENT:
-            self.entailment = _ENTAILMENT[geometry]
+        stem = geometry.split('-')[0]
+        if stem in _ENTAILMENT:
+            self.entailment = _ENTAILMENT[stem]
             self.entailment_weight = entailment_weight
             self.K = K
         else:
