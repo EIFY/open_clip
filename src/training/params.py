@@ -462,7 +462,7 @@ def parse_args(args):
     )
     parser.add_argument(
         "--geometry",
-        choices=['clip', 'elliptic', 'euclidean', 'hyperbolic', 'euclidean-inner', 'euclidean-squared', 'hyperbolic-inner'],
+        choices=['clip', 'elliptic', 'euclidean', 'hyperbolic', 'euclidean-inner', 'euclidean-squared', 'hyperbolic-inner', 'hyperbolic-squared'],
         default='clip',
         help='Geometry of the embedding space.'
     )

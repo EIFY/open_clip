@@ -110,6 +110,15 @@ def lorentzian_inner(x, y, curvature):
     return x_space @ y_space.T - torch.outer(x_time, y_time)
 
 
+def lorentzian_squared(x, y, curvature):
+    # FP32 for exponential map and losses for numerical stability,
+    # per https://arxiv.org/abs/2304.09172
+    x, y, curvature = x.double(), y.double(), curvature.double()
+    x_space, x_time = _exponential_map(x, curvature)
+    y_space, y_time = _exponential_map(y, curvature)
+    return -torch.acosh(-curvature * (x_space @ y_space.T - torch.outer(x_time, y_time))) ** 2 / curvature
+
+
 METRICS = {
     'clip': cosine_similarity,
     'elliptic': nsphere_arc,
@@ -118,6 +127,7 @@ METRICS = {
     'euclidean-squared': euclidean_squared,
     'hyperbolic': lorentzian_distance,
     'hyperbolic-inner': lorentzian_inner,
+    'hyperbolic-squared': lorentzian_squared,
 }
 
 
