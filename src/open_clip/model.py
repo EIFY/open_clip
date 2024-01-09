@@ -28,6 +28,7 @@ class CLIPVisionCfg:
     mlp_ratio: float = 4.0
     patch_size: int = 16
     image_size: Union[Tuple[int, int], int] = 224
+    euclidean_squared_attention: bool = False
     final_layernorm: bool = True
 
     ls_init_value: Optional[float] = None  # layer scale initial value
@@ -65,6 +66,7 @@ class CLIPTextCfg:
     pad_id: int = 0
     output_tokens: bool = False
     text_mask: str = 'first' # default first truncate in bpe_tokenizer
+    euclidean_squared_attention: bool = False
     final_layernorm: bool = True
 
 
@@ -143,6 +145,7 @@ def _build_vision_tower(
             output_dim=embed_dim,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            euclidean_squared_attention=vision_cfg.euclidean_squared_attention,
             final_layernorm=vision_cfg.final_layernorm,
         )
 
@@ -184,6 +187,7 @@ def _build_text_tower(
             pad_id=text_cfg.pad_id,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            euclidean_squared_attention=text_cfg.euclidean_squared_attention,
             final_layernorm=text_cfg.final_layernorm,
         )
     return text

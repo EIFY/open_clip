@@ -1,13 +1,96 @@
 from collections import OrderedDict
 import math
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.init import xavier_uniform_
+from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.utils.checkpoint import checkpoint
 
 from .utils import to_2tuple
+
+
+def scaled_euclidean_squared_attention(query, key, value, attn_mask=None, scale=None) -> torch.Tensor:
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    query_sq = query.square().sum(-1, keepdim=True)
+    key_sq = key.square().sum(-1, keepdim=True)
+    attn_weight = scale_factor * (2 * query @ key.transpose(-2, -1) - query_sq - key_sq.transpose(-2, -1))
+    if attn_mask is not None:
+        attn_weight = attn_weight + attn_mask
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    return attn_weight @ value
+
+
+def _in_projection_packed(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    w: torch.Tensor,
+    b: Optional[torch.Tensor] = None,
+) -> List[torch.Tensor]:
+    E = q.size(-1)
+    # self-attention only for now
+    proj = F.linear(q, w)
+    # reshape to 3, E and not E, 3 is deliberate for better memory coalescing and keeping same order as chunk()
+    proj = proj.unflatten(-1, (3, E)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
+    return proj[0], proj[1], proj[2]
+
+
+def multi_head_eu2_attention_forward(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    num_heads: int,
+    in_proj_weight: torch.Tensor,
+    out_proj_weight: torch.Tensor,
+    attn_mask: Optional[torch.Tensor] = None):
+    is_batched = query.dim() == 3
+    if not is_batched:
+        # unsqueeze if the input is unbatched
+        query = query.unsqueeze(1)
+        key = key.unsqueeze(1)
+        value = value.unsqueeze(1)
+
+    tgt_len, bsz, embed_dim = query.shape
+    src_len, _, _ = key.shape
+    head_dim = embed_dim // num_heads
+
+    q, k, v = _in_projection_packed(query, key, value, in_proj_weight)
+
+    # attn_mask here assumed to be of shape (L,S)
+
+    q = q.view(bsz, num_heads, tgt_len, head_dim)
+    k = k.view(bsz, num_heads, src_len, head_dim)
+    v = v.view(bsz, num_heads, src_len, head_dim)
+
+    attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask)
+    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
+
+    attn_output = F.linear(attn_output, out_proj_weight)
+    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
+    if not is_batched:
+        # squeeze the output if input was unbatched
+        attn_output = attn_output.squeeze(1)
+    return attn_output, None
+
+
+class MultiheadEu2Attention(nn.Module):
+
+    def __init__(self, embed_dim, num_heads, device=None, dtype=None):
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
+        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=False, **factory_kwargs)
+
+    def _reset_parameters(self):
+        xavier_uniform_(self.in_proj_weight)
+
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, need_weights=False, attn_mask: Optional[torch.Tensor] = None):
+        return multi_head_eu2_attention_forward(query, key, value, self.num_heads, self.in_proj_weight, self.out_proj.weight, attn_mask)
 
 
 class LayerNormFp32(nn.LayerNorm):
@@ -196,11 +279,12 @@ class ResidualAttentionBlock(nn.Module):
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
             is_cross_attention: bool = False,
+            euclidean_squared_attention: bool = False,
     ):
         super().__init__()
 
         self.ln_1 = norm_layer(d_model)
-        self.attn = nn.MultiheadAttention(d_model, n_head)
+        self.attn = MultiheadEu2Attention(d_model, n_head) if euclidean_squared_attention else nn.MultiheadAttention(d_model, n_head)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
@@ -295,6 +379,7 @@ class Transformer(nn.Module):
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
+            euclidean_squared_attention: bool = False,
     ):
         super().__init__()
         self.width = width
@@ -303,7 +388,7 @@ class Transformer(nn.Module):
 
         self.resblocks = nn.ModuleList([
             ResidualAttentionBlock(
-                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, norm_layer=norm_layer)
+                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, norm_layer=norm_layer, euclidean_squared_attention=euclidean_squared_attention)
             for _ in range(layers)
         ])
 
@@ -344,6 +429,7 @@ class VisionTransformer(nn.Module):
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
             output_tokens: bool = False,
+            euclidean_squared_attention: bool = False,
             final_layernorm: bool = True,
     ):
         super().__init__()
@@ -352,6 +438,8 @@ class VisionTransformer(nn.Module):
         patch_height, patch_width = self.patch_size = to_2tuple(patch_size)
         self.grid_size = (image_height // patch_height, image_width // patch_width)
         self.output_dim = output_dim
+        if euclidean_squared_attention:
+            norm_layer = nn.Identity
 
         # whether to layernorm each patch, as done in dual patchnorm paper - https://arxiv.org/abs/2302.01327v1
         self.input_patchnorm = input_patchnorm
@@ -381,16 +469,17 @@ class VisionTransformer(nn.Module):
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            euclidean_squared_attention=euclidean_squared_attention,
         )
 
         self.global_average_pool = global_average_pool
         if attentional_pool:
             self.attn_pool = AttentionalPooler(output_dim, width, n_head=attn_pooler_heads, n_queries=n_queries)
-            self.ln_post = norm_layer(output_dim) if final_layernorm else lambda x: x
+            self.ln_post = norm_layer(output_dim) if final_layernorm else nn.Identity()
             self.proj = nn.Parameter(scale * torch.randn(output_dim, output_dim))
         else:
             self.attn_pool = None
-            self.ln_post = norm_layer(width) if final_layernorm else lambda x: x
+            self.ln_post = norm_layer(width) if final_layernorm else nn.Identity()
             self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
 
         self.init_parameters()
@@ -521,6 +610,7 @@ class TextTransformer(nn.Module):
             embed_cls: bool = False,
             pad_id: int = 0,
             output_tokens: bool = False,
+            euclidean_squared_attention: bool = False,
             final_layernorm: bool = True,
     ):
         super().__init__()
@@ -531,6 +621,8 @@ class TextTransformer(nn.Module):
         self.output_dim = output_dim
         self.heads = heads
         self.pad_id = pad_id
+        if euclidean_squared_attention:
+            norm_layer = nn.Identity
 
         self.text_projection = nn.Parameter(torch.empty(width, output_dim))
 
@@ -549,8 +641,9 @@ class TextTransformer(nn.Module):
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             norm_layer=norm_layer,
+            euclidean_squared_attention=euclidean_squared_attention,
         )
-        self.ln_final = norm_layer(width) if final_layernorm else lambda x: x
+        self.ln_final = norm_layer(width) if final_layernorm else nn.Identity()
 
         self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
 
