@@ -23,56 +23,24 @@ def scaled_euclidean_squared_attention(query, key, value, attn_mask=None, scale=
     return attn_weight @ value
 
 
-def _in_projection_packed(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    w: torch.Tensor,
-    b: Optional[torch.Tensor] = None,
-) -> List[torch.Tensor]:
-    E = q.size(-1)
-    # self-attention only for now
-    proj = F.linear(q, w)
-    # reshape to 3, E and not E, 3 is deliberate for better memory coalescing and keeping same order as chunk()
-    proj = proj.unflatten(-1, (3, E)).unsqueeze(0).transpose(0, -2).squeeze(-2).contiguous()
-    return proj[0], proj[1], proj[2]
-
-
 def multi_head_eu2_attention_forward(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
+    x: torch.Tensor,
     num_heads: int,
     in_proj_weight: torch.Tensor,
     out_proj_weight: torch.Tensor,
     attn_mask: Optional[torch.Tensor] = None):
-    is_batched = query.dim() == 3
-    if not is_batched:
-        # unsqueeze if the input is unbatched
-        query = query.unsqueeze(1)
-        key = key.unsqueeze(1)
-        value = value.unsqueeze(1)
 
-    tgt_len, bsz, embed_dim = query.shape
-    src_len, _, _ = key.shape
-    head_dim = embed_dim // num_heads
-
-    q, k, v = _in_projection_packed(query, key, value, in_proj_weight)
+    # self-attention only for now
+    L, N, C = x.shape
+    q, k, v = F.linear(x, in_proj_weight).chunk(3, dim=-1)
+    q = q.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
+    k = k.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
+    v = v.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
 
     # attn_mask here assumed to be of shape (L,S)
-
-    q = q.view(bsz, num_heads, tgt_len, head_dim)
-    k = k.view(bsz, num_heads, src_len, head_dim)
-    v = v.view(bsz, num_heads, src_len, head_dim)
-
     attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask)
-    attn_output = attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)
-
+    attn_output = attn_output.transpose(0, 1).reshape(L, N, C)
     attn_output = F.linear(attn_output, out_proj_weight)
-    attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
-    if not is_batched:
-        # squeeze the output if input was unbatched
-        attn_output = attn_output.squeeze(1)
     return attn_output, None
 
 
@@ -90,7 +58,7 @@ class MultiheadEu2Attention(nn.Module):
         xavier_uniform_(self.in_proj_weight)
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, need_weights=False, attn_mask: Optional[torch.Tensor] = None):
-        return multi_head_eu2_attention_forward(query, key, value, self.num_heads, self.in_proj_weight, self.out_proj.weight, attn_mask)
+        return multi_head_eu2_attention_forward(query, self.num_heads, self.in_proj_weight, self.out_proj.weight, attn_mask)
 
 
 class LayerNormFp32(nn.LayerNorm):
