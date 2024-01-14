@@ -14,9 +14,9 @@ from .utils import to_2tuple
 
 def scaled_euclidean_squared_attention(query, key, value, attn_mask=None, scale=None) -> torch.Tensor:
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
-    # query_sq = query.square().sum(-1, keepdim=True)
-    # key_sq = key.square().sum(-1, keepdim=True)
-    attn_weight = scale_factor * query @ key.transpose(-2, -1)  # (2 * query @ key.transpose(-2, -1) - query_sq - key_sq.transpose(-2, -1))
+    query_sq = query.square().sum(-1, keepdim=True)
+    key_sq = key.square().sum(-1, keepdim=True)
+    attn_weight = scale_factor * (2 * query @ key.transpose(-2, -1) - query_sq - key_sq.transpose(-2, -1))
     if attn_mask is not None:
         attn_weight = attn_weight + attn_mask
     attn_weight = torch.softmax(attn_weight, dim=-1)
@@ -406,8 +406,8 @@ class VisionTransformer(nn.Module):
         patch_height, patch_width = self.patch_size = to_2tuple(patch_size)
         self.grid_size = (image_height // patch_height, image_width // patch_width)
         self.output_dim = output_dim
-        # if euclidean_squared_attention:
-        #     norm_layer = nn.Identity
+        if euclidean_squared_attention:
+            norm_layer = nn.Identity
 
         # whether to layernorm each patch, as done in dual patchnorm paper - https://arxiv.org/abs/2302.01327v1
         self.input_patchnorm = input_patchnorm
@@ -589,8 +589,8 @@ class TextTransformer(nn.Module):
         self.output_dim = output_dim
         self.heads = heads
         self.pad_id = pad_id
-        # if euclidean_squared_attention:
-        #     norm_layer = nn.Identity
+        if euclidean_squared_attention:
+            norm_layer = nn.Identity
 
         self.text_projection = nn.Parameter(torch.empty(width, output_dim))
 
