@@ -5,7 +5,6 @@ from typing import Callable, List, Optional, Sequence, Tuple
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.init import xavier_uniform_, constant_
 from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.utils.checkpoint import checkpoint
 
@@ -61,10 +60,10 @@ class MultiheadEu2Attention(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        xavier_uniform_(self.in_proj_weight)
+        nn.init.xavier_uniform_(self.in_proj_weight)
         if self.in_proj_bias is not None:
-            constant_(self.in_proj_bias, 0.)
-            constant_(self.out_proj.bias, 0.)
+            nn.init.constant_(self.in_proj_bias, 0.)
+            nn.init.constant_(self.out_proj.bias, 0.)
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, need_weights=False, attn_mask: Optional[torch.Tensor] = None):
         return multi_head_eu2_attention_forward(query, self.num_heads, self.in_proj_weight, self.in_proj_bias, self.out_proj.weight, self.out_proj.bias, attn_mask)
@@ -256,13 +255,13 @@ class ResidualAttentionBlock(nn.Module):
             act_layer: Callable = nn.GELU,
             norm_layer: Callable = LayerNorm,
             is_cross_attention: bool = False,
-            euclidean_squared_attention: bool = False,
+            mha: Callable = nn.MultiheadAttention,
             bias: bool = True,
     ):
         super().__init__()
 
         self.ln_1 = norm_layer(d_model)
-        self.attn = MultiheadEu2Attention(d_model, n_head, bias=bias) if euclidean_squared_attention else nn.MultiheadAttention(d_model, n_head, bias=bias)
+        self.attn = mha(d_model, n_head, bias=bias)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
@@ -371,7 +370,7 @@ class Transformer(nn.Module):
                 ls_init_value=ls_init_value,
                 act_layer=act_layer,
                 norm_layer=norm_layer,
-                euclidean_squared_attention=euclidean_squared_attention,
+                mha=MultiheadEu2Attention if euclidean_squared_attention else nn.MultiheadAttention,
                 bias=bias,
             )
             for _ in range(layers)
