@@ -5,8 +5,7 @@
         "layers": 12,
         "width": 384,
         "patch_size": 16,
-        "euclidean_squared_attention": true,
-        "bias": false
+        "euclidean_squared_attention": true
     },
     "text_cfg": {
         "context_length": 77,
@@ -14,7 +13,6 @@
         "width": 384,
         "heads": 6,
         "layers": 12,
-        "euclidean_squared_attention": true,
-        "bias": false
+        "final_layernorm": false
     }
 }
