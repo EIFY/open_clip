@@ -479,6 +479,12 @@ def parse_args(args):
         help="Radius of the epsilon-ball within which aperture is undefined."
     )
     parser.add_argument(
+        "--final-min-radius",
+        type=float,
+        default=None,
+        help="Final min-radius at the end of training. If None, it's kept constant."
+    )
+    parser.add_argument(
         "--redcaps-json",
         action="store_true",
         help="Expect Redcaps json caption files in webdataset shards."

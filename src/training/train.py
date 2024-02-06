@@ -62,7 +62,7 @@ def backward(total_loss, scaler):
         total_loss.backward()
 
 
-def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=None):
+def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, min_radius_scheduler=None, tb_writer=None):
     device = torch.device(args.device)
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
@@ -89,6 +89,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
         if not args.skip_scheduler:
             scheduler(step)
+        if min_radius_scheduler:
+            loss.K = min_radius_scheduler(step)
 
         images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
