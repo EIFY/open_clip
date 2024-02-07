@@ -236,6 +236,16 @@ def parse_args(args):
     parser.add_argument(
         '--image-std', type=float, nargs='+', default=None, metavar='STD',
         help='Override default image std deviation of of dataset')
+    parser.add_argument(
+        '--image-interpolation',
+        default=None, type=str, choices=['bicubic', 'bilinear', 'random'],
+        help="Override default image resize interpolation"
+    )
+    parser.add_argument(
+        '--image-resize-mode',
+        default=None, type=str, choices=['shortest', 'longest', 'squash'],
+        help="Override default image resize (& crop) mode during inference"
+    )
     parser.add_argument('--aug-cfg', nargs='*', default={}, action=ParseKwargs)
     parser.add_argument(
         "--grad-checkpointing",
@@ -378,7 +388,7 @@ def parse_args(args):
         "--lock-text-freeze-layer-norm",
         default=False,
         action='store_true',
-        help="Freeze BatchNorm running stats in text tower for any locked layers.",
+        help="Freeze LayerNorm running stats in text tower for any locked layers.",
     )
     parser.add_argument(
         "--log-every-n-steps",
@@ -496,6 +506,7 @@ def parse_args(args):
         help="Probability of randomly prefixing subreddit name (word-segmented) "
         "to the caption for RedCaps instances."
     )
+
     args = parser.parse_args(args)
 
     # If some params are not passed, we use the default values based on model name.
