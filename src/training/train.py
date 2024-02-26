@@ -275,15 +275,14 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
 
     if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
         #assert args.geometry=='clip', "Validation loss is only implemented for plain vanilla CLIP"
-        compute_and_plot_norm(all_image_features, all_text_features)
         dataloader = data['val'].dataloader
-        num_samples = 0
-        samples_per_val = dataloader.num_samples
+        #num_samples = 0
+        #samples_per_val = dataloader.num_samples
 
         # FIXME this does not scale past small eval datasets
         # all_image_features @ all_text_features will blow up memory and compute very quickly
-        cumulative_loss = 0.0
-        cumulative_gen_loss = 0.0
+        #cumulative_loss = 0.0
+        #cumulative_gen_loss = 0.0
         all_image_features, all_text_features = [], []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
@@ -295,11 +294,12 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
                     model_out = model(images, texts)
                     image_features = model_out["image_features"]
                     text_features = model_out["text_features"]
-                    logit_scale = model_out["logit_scale"]
+                    # logit_scale = model_out["logit_scale"]
                     # features are accumulated in CPU tensors, otherwise GPU memory exhausted quickly
                     # however, system RAM is easily exceeded and compute time becomes problematic
                     all_image_features.append(image_features.cpu())
                     all_text_features.append(text_features.cpu())
+                    '''
                     logit_scale = logit_scale.mean()
                     logits_per_image = logit_scale * image_features @ text_features.t()
                     logits_per_text = logits_per_image.t()
@@ -312,7 +312,7 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
                     ) / 2
 
                     gen_loss = maybe_compute_generative_loss(model_out)
-
+                    
                 cumulative_loss += total_loss * batch_size
                 num_samples += batch_size
                 if is_master(args) and (i % 100) == 0:
@@ -337,6 +337,9 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
             if gen_loss is not None:
                 gen_loss = cumulative_gen_loss / num_samples
                 metrics.update({"val_generative_loss": gen_loss.item()})
+            '''
+
+        compute_and_plot_norm(all_image_features, all_text_features)
 
     if not metrics:
         return metrics
