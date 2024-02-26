@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.parallel.distributed import DistributedDataParallel
+import matplotlib.pyplot as plt
 
 try:
     import wandb
@@ -232,6 +233,33 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     # end for
 
 
+def compute_and_plot_norm(all_image_embeddings, all_text_embeddings):
+    # compute the L2 norms
+    # dim = -1 assuming norm along the last dimension
+    image_l2_norms = torch.norm(all_image_embeddings, p=2, dim=-1)
+    text_l2_norms = torch.norm(all_text_embeddings, p=2, dim=-1)
+
+    # plot norm
+    # convert tensors to numpy arrays
+    image_l2_norms_np = image_l2_norms.numpy()
+    text_l2_norms_np = text_l2_norms.numpy()
+
+    # plot the distribution of image L2 norms
+    plt.hist(image_l2_norms_np, bins=50, alpha=0.5, label='Image L2 Norms')
+
+    # plot the distribution of text L2 norms
+    plt.hist(text_l2_norms_np, bins=50, alpha=0.5, label='Text L2 Norms')
+
+    plt.xlabel('L2 Norms')
+    plt.ylabel('Frequency')
+    plt.title('Normalized distribution of Image and Text L2 Norms')
+    plt.legend()
+
+    # save the plot as an image 
+    plt.savefig('norm_distribution_plot.png')
+    plt.close()
+
+
 def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
     metrics = {}
     if not is_master(args):
@@ -246,7 +274,8 @@ def evaluate(model, data, epoch, args, tb_writer=None, tokenizer=None):
     input_dtype = get_input_dtype(args.precision)
 
     if 'val' in data and (args.val_frequency and ((epoch % args.val_frequency) == 0 or epoch == args.epochs)):
-        assert args.geometry=='clip', "Validation loss is only implemented for plain vanilla CLIP"
+        #assert args.geometry=='clip', "Validation loss is only implemented for plain vanilla CLIP"
+        compute_and_plot_norm(all_image_features, all_text_features)
         dataloader = data['val'].dataloader
         num_samples = 0
         samples_per_val = dataloader.num_samples
