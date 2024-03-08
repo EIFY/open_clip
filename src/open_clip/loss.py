@@ -134,12 +134,12 @@ METRICS = {
 def euclidean_entailment(x, y, _, K):
     # https://arxiv.org/abs/1804.01882
     y_x = y - x
-    x_norm = x.norm(dim=1)
-    ext = torch.acos((y_x * x).sum(-1) / (y_x.norm(dim=1) * x_norm))
+    x_norm = x.norm(dim=-1)
+    ext = torch.acos((y_x * x).sum(-1) / (y_x.norm(dim=-1) * x_norm))
     if not K:
         return ext.mean()
     aper = torch.asin(torch.clamp(K / x_norm, max=1.))
-    return torch.clamp(ext - aper, min=0.).mean()
+    return torch.clamp(ext - aper, min=0.)
 
 
 def hyperbolic_entailment(x, y, curvature, K):
@@ -147,7 +147,7 @@ def hyperbolic_entailment(x, y, curvature, K):
     # per https://arxiv.org/abs/2304.09172
     x, y, curvature = x.double(), y.double(), curvature.double()
     x_space, x_time = _exponential_map(x, curvature)
-    x_space_norm = x_space.norm(dim=1)
+    x_space_norm = x_space.norm(dim=-1)
     y_space, y_time = _exponential_map(y, curvature)
     l = (x_space * y_space).sum(-1) - x_time * y_time
     c_l = curvature * l
@@ -155,7 +155,7 @@ def hyperbolic_entailment(x, y, curvature, K):
     if not K:
         return ext.mean()
     aper = torch.asin(torch.clamp(2 * K / (torch.sqrt(curvature) * x_space_norm), max=1.))
-    return torch.clamp(ext - aper, min=0.).mean()
+    return torch.clamp(ext - aper, min=0.)
 
 
 _ENTAILMENT = {
@@ -242,7 +242,7 @@ class ClipLoss(nn.Module):
 
         if self.entailment_weight:
             entailment_loss = self.entailment_weight * self.entailment(
-                text_features, image_features, curvature, self.K)
+                text_features, image_features, curvature, self.K).mean()
             output["entailment_loss"] = entailment_loss
             total_loss = contrastive_loss + entailment_loss
 
@@ -343,14 +343,14 @@ class DistillClipLoss(ClipLoss):
             output = {"contrastive_loss": contrastive_loss, "distill_loss": distill_loss}
             if self.entailment_weight:
                 entailment_loss = self.entailment_weight * self.entailment(
-                    text_features, image_features, curvature, self.K)
+                    text_features, image_features, curvature, self.K).mean()
                 output["entailment_loss"] = entailment_loss
             return output
 
         t = (contrastive_loss, distill_loss)
         if self.entailment_weight:
             entailment_loss = self.entailment_weight * self.entailment(
-                text_features, image_features, curvature, self.K)
+                text_features, image_features, curvature, self.K).mean()
             t += (entailment_loss, )
         return t
 
@@ -566,7 +566,7 @@ class SigLipLoss(nn.Module):
 
         if self.entailment_weight:
             entailment_loss = self.entailment_weight * self.entailment(
-                text_features, image_features, curvature, self.K)
+                text_features, image_features, curvature, self.K).mean()
             output["entailment_loss"] = entailment_loss
             loss = loss + entailment_loss
 
