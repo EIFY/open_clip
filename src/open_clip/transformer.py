@@ -316,12 +316,16 @@ class Transformer(nn.Module):
         return self.resblocks[0].mlp.c_fc.weight.dtype
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+        print(x[0,:,:].shape)
+        l = [x[0,:,:].norm(dim=-1).mean().item()]
         for r in self.resblocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
                 x = checkpoint(r, x, None, None, attn_mask)
             else:
                 x = r(x, attn_mask=attn_mask)
+                l.append(x[0,:,:].norm(dim=-1).mean().item())
+        print(l)
         return x
 
 
@@ -512,8 +516,9 @@ class VisionTransformer(nn.Module):
 
         x = self.patch_dropout(x)
         x = self.ln_pre(x)
-
+        print("VisionTransformer:")
         x = x.permute(1, 0, 2)  # NLD -> LND
+        print(0, x[0,:,:].norm(dim=-1).mean())
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
@@ -537,6 +542,7 @@ class VisionTransformer(nn.Module):
             pooled = self.ln_post(pooled)
         else:
             x = self.ln_post(x)
+            print(-1, x[:, 0, :].norm(dim=-1).mean())
             pooled, tokens = self._global_pool(x)
 
         if self.proj is not None:
@@ -685,6 +691,7 @@ class TextTransformer(nn.Module):
                 attn_mask = attn_mask[None, :seq_len, :seq_len] + cls_mask[:, :seq_len, :seq_len]
 
         x = x + self.positional_embedding[:seq_len].to(cast_dtype)
+        print("TextTransformer:")
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x, attn_mask=attn_mask)
         x = x.permute(1, 0, 2)  # LND -> NLD
