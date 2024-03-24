@@ -12,7 +12,7 @@ from .utils import to_2tuple
 
 
 def scaled_euclidean_squared_attention(query, key, value, attn_mask=None, scale=None) -> torch.Tensor:
-    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    scale_factor = 1 / query.size(-1) if scale is None else scale
     query_sq = query.square().sum(-1, keepdim=True)
     key_sq = key.square().sum(-1, keepdim=True)
     attn_weight = scale_factor * (2 * query @ key.transpose(-2, -1) - query_sq - key_sq.transpose(-2, -1))
@@ -29,7 +29,8 @@ def multi_head_eu2_attention_forward(
     in_proj_bias: Optional[torch.Tensor],
     out_proj_weight: torch.Tensor,
     out_proj_bias: Optional[torch.Tensor],
-    attn_mask: Optional[torch.Tensor] = None):
+    attn_mask: Optional[torch.Tensor] = None,
+    scale: Optional[torch.Tensor] = None):
 
     # self-attention only for now
     L, N, C = x.shape
@@ -39,7 +40,7 @@ def multi_head_eu2_attention_forward(
     v = v.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
 
     # attn_mask here assumed to be of shape (L,S)
-    attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask)
+    attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask, scale)
     attn_output = attn_output.transpose(0, 1).reshape(L, N, C)
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
     return attn_output, None
@@ -62,7 +63,8 @@ class MultiheadEu2Attention(nn.Module):
     def _reset_parameters(self):
         # This xavier_uniform_ results in unstable training while leaving it out makes it stable with zero initialization for ViT.
         # TODO: Figure out better parameter initialization systematically.
-        # nn.init.xavier_uniform_(self.in_proj_weight)
+        scale = self.embed_dim ** -0.5
+        nn.init.normal_(self.in_proj_weight, std=scale)
         if self.in_proj_bias is not None:
             nn.init.constant_(self.in_proj_bias, 0.)
             nn.init.constant_(self.out_proj.bias, 0.)
@@ -255,20 +257,21 @@ class ResidualAttentionBlock(nn.Module):
             mlp_ratio: float = 4.0,
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
+            attn_norm_layer: Callable = LayerNorm,
+            mlp_norm_layer: Callable = LayerNorm,
             is_cross_attention: bool = False,
             mha: Callable = nn.MultiheadAttention,
             bias: bool = True,
     ):
         super().__init__()
-
-        self.ln_1 = norm_layer(d_model)
+        print(attn_norm_layer, mlp_norm_layer)
+        self.ln_1 = attn_norm_layer(d_model)
         self.attn = mha(d_model, n_head, bias=bias)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
 
-        self.ln_2 = norm_layer(d_model)
+        self.ln_2 = mlp_norm_layer(d_model)
         mlp_width = int(d_model * mlp_ratio)
         self.mlp = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(d_model, mlp_width)),
@@ -302,8 +305,12 @@ class ResidualAttentionBlock(nn.Module):
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
 
-        x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
-        x = x + self.ls_2(self.mlp(self.ln_2(x)))
+        y = self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
+        print(y.norm(dim=-1).mean())
+        x = q_x + y
+        y = self.ls_2(self.mlp(self.ln_2(x)))
+        print(y.norm(dim=-1).mean())
+        x = x + y
         return x
 
 
@@ -357,7 +364,8 @@ class Transformer(nn.Module):
             mlp_ratio: float = 4.0,
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
+            attn_norm_layer: Callable = LayerNorm,
+            mlp_norm_layer: Callable = LayerNorm,
             euclidean_squared_attention: bool = False,
             bias: bool = True,
     ):
@@ -371,7 +379,8 @@ class Transformer(nn.Module):
                 width, heads, mlp_ratio,
                 ls_init_value=ls_init_value,
                 act_layer=act_layer,
-                norm_layer=norm_layer,
+                attn_norm_layer=attn_norm_layer,
+                mlp_norm_layer=mlp_norm_layer,
                 mha=MultiheadEu2Attention if euclidean_squared_attention else nn.MultiheadAttention,
                 bias=bias,
             )
@@ -383,13 +392,23 @@ class Transformer(nn.Module):
             return self.resblocks[0].mlp.c_fc.int8_original_dtype
         return self.resblocks[0].mlp.c_fc.weight.dtype
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+    def log(self, x, text: Optional[torch.Tensor] = None):
+        if text is not None:
+            x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)]
+        else:
+            x = x[0,:,:]
+        return x.norm(dim=-1).mean().item()
+
+    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, text: Optional[torch.Tensor] = None):
+        l = [self.log(x, text)]
         for r in self.resblocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
                 x = checkpoint(r, x, None, None, attn_mask)
             else:
                 x = r(x, attn_mask=attn_mask)
+                l.append(self.log(x, text))
+        print(l)
         return x
 
 
@@ -425,8 +444,9 @@ class VisionTransformer(nn.Module):
         patch_height, patch_width = self.patch_size = to_2tuple(patch_size)
         self.grid_size = (image_height // patch_height, image_width // patch_width)
         self.output_dim = output_dim
+        attn_norm_layer = mlp_norm_layer = norm_layer
         if euclidean_squared_attention:
-            norm_layer = nn.Identity
+            attn_norm_layer = nn.Identity
 
         # whether to layernorm each patch, as done in dual patchnorm paper - https://arxiv.org/abs/2302.01327v1
         self.input_patchnorm = input_patchnorm
@@ -440,14 +460,15 @@ class VisionTransformer(nn.Module):
             self.conv1 = nn.Conv2d(in_channels=3, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
 
         # class embeddings and positional embeddings
-        scale = width ** -0.5
+        scale = width ** -0.5 * 2 ** -((1 + layers) / 2)
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
         self.positional_embedding = nn.Parameter(scale * torch.randn(self.grid_size[0] * self.grid_size[1] + 1, width))
 
+        scale = width ** -0.5
         # setting a patch_dropout of 0. would mean it is disabled and this function would be the identity fn
         self.patch_dropout = PatchDropout(patch_dropout) if patch_dropout > 0. else nn.Identity()
 
-        self.ln_pre = norm_layer(width)
+        self.ln_pre = attn_norm_layer(width)
         self.transformer = Transformer(
             width,
             layers,
@@ -455,7 +476,8 @@ class VisionTransformer(nn.Module):
             mlp_ratio,
             ls_init_value=ls_init_value,
             act_layer=act_layer,
-            norm_layer=norm_layer,
+            attn_norm_layer=attn_norm_layer,
+            mlp_norm_layer=mlp_norm_layer,
             euclidean_squared_attention=euclidean_squared_attention,
             bias=bias,
         )
@@ -463,11 +485,11 @@ class VisionTransformer(nn.Module):
         self.global_average_pool = global_average_pool
         if attentional_pool:
             self.attn_pool = AttentionalPooler(output_dim, width, n_head=attn_pooler_heads, n_queries=n_queries)
-            self.ln_post = norm_layer(output_dim) if final_layernorm else nn.Identity()
+            self.ln_post = attn_norm_layer(output_dim) if final_layernorm else nn.Identity()
             self.proj = nn.Parameter(scale * torch.randn(output_dim, output_dim))
         else:
             self.attn_pool = None
-            self.ln_post = norm_layer(width) if final_layernorm else nn.Identity()
+            self.ln_post = attn_norm_layer(width) if final_layernorm else nn.Identity()
             self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
 
         self.init_parameters()
@@ -561,6 +583,7 @@ class VisionTransformer(nn.Module):
         x = self.ln_pre(x)
 
         x = x.permute(1, 0, 2)  # NLD -> LND
+        print("VisionTransformer:", self.transformer.log(x))
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
@@ -610,8 +633,9 @@ class TextTransformer(nn.Module):
         self.output_dim = output_dim
         self.heads = heads
         self.pad_id = pad_id
+        attn_norm_layer = mlp_norm_layer = norm_layer
         if euclidean_squared_attention:
-            norm_layer = nn.Identity
+            attn_norm_layer = nn.Identity
 
         self.text_projection = nn.Parameter(torch.empty(width, output_dim))
 
@@ -629,33 +653,27 @@ class TextTransformer(nn.Module):
             heads=heads,
             ls_init_value=ls_init_value,
             act_layer=act_layer,
-            norm_layer=norm_layer,
+            attn_norm_layer=attn_norm_layer,
+            mlp_norm_layer=mlp_norm_layer,
             euclidean_squared_attention=euclidean_squared_attention,
             bias=bias,
         )
-        self.ln_final = norm_layer(width) if final_layernorm else nn.Identity()
+        self.transformer.log = nn.Identity()
+        self.ln_final = attn_norm_layer(width) if final_layernorm else nn.Identity()
 
         self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
 
         self.init_parameters()
 
     def init_parameters(self):
-        nn.init.normal_(self.token_embedding.weight, std=0.02)
-        nn.init.normal_(self.positional_embedding, std=0.01)
+        scale = self.transformer.width ** -0.5 * 2 ** -((1 + self.transformer.layers) / 2)
+        nn.init.normal_(self.token_embedding.weight, std=scale)
+        nn.init.normal_(self.positional_embedding, std=scale)
         if self.cls_emb is not None:
-            nn.init.normal_(self.cls_emb, std=0.01)
-
-        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
-        attn_std = self.transformer.width ** -0.5
-        fc_std = (2 * self.transformer.width) ** -0.5
-        for block in self.transformer.resblocks:
-            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
-            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
-            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
-            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
-
+            nn.init.normal_(self.cls_emb, std=scale)
+        scale = self.transformer.width ** -0.5
         if self.text_projection is not None:
-            nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
+            nn.init.normal_(self.text_projection, std=scale)
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
@@ -695,7 +713,7 @@ class TextTransformer(nn.Module):
 
         x = x + self.positional_embedding[:seq_len].to(cast_dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x, attn_mask=attn_mask)
+        x = self.transformer(x, attn_mask=attn_mask, text=text)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
         # x.shape = [batch_size, n_ctx, transformer.width]
