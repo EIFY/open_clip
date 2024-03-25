@@ -60,9 +60,7 @@ class MultiheadEu2Attention(nn.Module):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        # This xavier_uniform_ results in unstable training while leaving it out makes it stable with zero initialization for ViT.
-        # TODO: Figure out better parameter initialization systematically.
-        # nn.init.xavier_uniform_(self.in_proj_weight)
+        nn.init.xavier_uniform_(self.in_proj_weight)
         if self.in_proj_bias is not None:
             nn.init.constant_(self.in_proj_bias, 0.)
             nn.init.constant_(self.out_proj.bias, 0.)
@@ -262,7 +260,7 @@ class ResidualAttentionBlock(nn.Module):
     ):
         super().__init__()
 
-        self.ln_1 = norm_layer(d_model)
+        self.ln_1 = nn.Identity() if mha is MultiheadEu2Attention else norm_layer(d_model)
         self.attn = mha(d_model, n_head, bias=bias)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
@@ -425,6 +423,17 @@ class VisionTransformer(nn.Module):
         patch_height, patch_width = self.patch_size = to_2tuple(patch_size)
         self.grid_size = (image_height // patch_height, image_width // patch_width)
         self.output_dim = output_dim
+        self.transformer = Transformer(
+            width,
+            layers,
+            heads,
+            mlp_ratio,
+            ls_init_value=ls_init_value,
+            act_layer=act_layer,
+            norm_layer=norm_layer,
+            euclidean_squared_attention=euclidean_squared_attention,
+            bias=bias,
+        )
         if euclidean_squared_attention:
             norm_layer = nn.Identity
 
@@ -448,17 +457,6 @@ class VisionTransformer(nn.Module):
         self.patch_dropout = PatchDropout(patch_dropout) if patch_dropout > 0. else nn.Identity()
 
         self.ln_pre = norm_layer(width)
-        self.transformer = Transformer(
-            width,
-            layers,
-            heads,
-            mlp_ratio,
-            ls_init_value=ls_init_value,
-            act_layer=act_layer,
-            norm_layer=norm_layer,
-            euclidean_squared_attention=euclidean_squared_attention,
-            bias=bias,
-        )
 
         self.global_average_pool = global_average_pool
         if attentional_pool:
@@ -610,9 +608,6 @@ class TextTransformer(nn.Module):
         self.output_dim = output_dim
         self.heads = heads
         self.pad_id = pad_id
-        if euclidean_squared_attention:
-            norm_layer = nn.Identity
-
         self.text_projection = nn.Parameter(torch.empty(width, output_dim))
 
         if embed_cls:
@@ -633,6 +628,8 @@ class TextTransformer(nn.Module):
             euclidean_squared_attention=euclidean_squared_attention,
             bias=bias,
         )
+        if euclidean_squared_attention:
+            norm_layer = nn.Identity
         self.ln_final = norm_layer(width) if final_layernorm else nn.Identity()
 
         self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
