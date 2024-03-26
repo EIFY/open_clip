@@ -29,7 +29,8 @@ def multi_head_eu2_attention_forward(
     in_proj_bias: Optional[torch.Tensor],
     out_proj_weight: torch.Tensor,
     out_proj_bias: Optional[torch.Tensor],
-    attn_mask: Optional[torch.Tensor] = None):
+    attn_mask: Optional[torch.Tensor] = None,
+    scale: Optional[torch.Tensor] = None):
 
     # self-attention only for now
     L, N, C = x.shape
@@ -39,7 +40,7 @@ def multi_head_eu2_attention_forward(
     v = v.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
 
     # attn_mask here assumed to be of shape (L,S)
-    attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask)
+    attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask, scale)
     attn_output = attn_output.transpose(0, 1).reshape(L, N, C)
     attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
     return attn_output, None
@@ -57,6 +58,7 @@ class MultiheadEu2Attention(nn.Module):
         if bias:
             self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
         self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
+        self.scale = nn.Parameter(-torch.ones([]) * math.log(embed_dim) / 2)
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -66,7 +68,7 @@ class MultiheadEu2Attention(nn.Module):
             nn.init.constant_(self.out_proj.bias, 0.)
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, need_weights=False, attn_mask: Optional[torch.Tensor] = None):
-        return multi_head_eu2_attention_forward(query, self.num_heads, self.in_proj_weight, self.in_proj_bias, self.out_proj.weight, self.out_proj.bias, attn_mask)
+        return multi_head_eu2_attention_forward(query, self.num_heads, self.in_proj_weight, self.in_proj_bias, self.out_proj.weight, self.out_proj.bias, attn_mask, self.scale.exp())
 
 
 class LayerNormFp32(nn.LayerNorm):
