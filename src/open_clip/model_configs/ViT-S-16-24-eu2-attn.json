@@ -1,0 +1,20 @@
+{
+    "embed_dim": 384,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 24,
+        "width": 384,
+        "patch_size": 16,
+        "euclidean_squared_attention": true,
+        "bias": false
+    },
+    "text_cfg": {
+        "context_length": 77,
+        "vocab_size": 49408,
+        "width": 384,
+        "heads": 6,
+        "layers": 24,
+        "euclidean_squared_attention": true,
+        "bias": false
+    }
+}

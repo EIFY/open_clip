@@ -25,16 +25,20 @@ def scaled_euclidean_squared_attention(query, key, value, attn_mask=None, scale=
 def multi_head_eu2_attention_forward(
     x: torch.Tensor,
     num_heads: int,
+    v_mul: int,
     in_proj_weight: torch.Tensor,
     in_proj_bias: Optional[torch.Tensor],
+    mlp_weight: Optional[torch.Tensor],
     out_proj_weight: torch.Tensor,
     out_proj_bias: Optional[torch.Tensor],
     attn_mask: Optional[torch.Tensor] = None,
-    scale: Optional[torch.Tensor] = None):
+    scale: Optional[torch.Tensor] = None,
+    act_layer=None):
 
     # self-attention only for now
     L, N, C = x.shape
-    q, k, v = F.linear(x, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
+    q, k, v = F.linear(x, in_proj_weight, in_proj_bias).split([C, C, v_mul * C], dim=-1)
+    v = F.linear(act_layer(v), mlp_weight)
     q = q.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
     k = k.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
     v = v.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
@@ -48,27 +52,31 @@ def multi_head_eu2_attention_forward(
 
 class MultiheadEu2Attention(nn.Module):
 
-    def __init__(self, embed_dim, num_heads, bias: bool = True, device=None, dtype=None):
+    def __init__(self, embed_dim, num_heads, v_mul: int = 1, bias: bool = True, act_layer: Callable = nn.GELU, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
+        self.v_mul = v_mul
+        self.in_proj_weight = nn.Parameter(torch.empty(((2 + v_mul) * embed_dim, embed_dim), **factory_kwargs))
         self.in_proj_bias = None
         if bias:
-            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
+            self.in_proj_bias = nn.Parameter(torch.empty((2 + v_mul) * embed_dim, **factory_kwargs))
+        self.mlp = nn.Linear(v_mul * embed_dim, embed_dim, bias=bias, **factory_kwargs)
         self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
         self.scale = nn.Parameter(-torch.ones([]) * math.log(embed_dim) / 2)
+        self.act_layer = act_layer()
         self._reset_parameters()
 
     def _reset_parameters(self):
-        nn.init.xavier_uniform_(self.in_proj_weight)
+        scale = self.embed_dim ** -0.5
+        nn.init.normal_(self.in_proj_weight, std=scale)
         if self.in_proj_bias is not None:
             nn.init.constant_(self.in_proj_bias, 0.)
             nn.init.constant_(self.out_proj.bias, 0.)
 
     def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, need_weights=False, attn_mask: Optional[torch.Tensor] = None):
-        return multi_head_eu2_attention_forward(query, self.num_heads, self.in_proj_weight, self.in_proj_bias, self.out_proj.weight, self.out_proj.bias, attn_mask, self.scale.exp())
+        return multi_head_eu2_attention_forward(query, self.num_heads, self.v_mul, self.in_proj_weight, self.in_proj_bias, self.mlp.weight, self.out_proj.weight, self.out_proj.bias, attn_mask, self.scale.exp(), self.act_layer)
 
 
 class LayerNormFp32(nn.LayerNorm):
@@ -263,19 +271,10 @@ class ResidualAttentionBlock(nn.Module):
         super().__init__()
 
         self.ln_1 = nn.Identity() if mha is MultiheadEu2Attention else norm_layer(d_model)
-        self.attn = mha(d_model, n_head, bias=bias)
+        self.attn = mha(d_model, n_head, v_mul=int(mlp_ratio), bias=bias, act_layer=act_layer)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
-
-        self.ln_2 = norm_layer(d_model)
-        mlp_width = int(d_model * mlp_ratio)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, mlp_width)),
-            ("gelu", act_layer()),
-            ("c_proj", nn.Linear(mlp_width, d_model))
-        ]))
-        self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
 
     def attention(
             self,
@@ -303,7 +302,6 @@ class ResidualAttentionBlock(nn.Module):
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
 
         x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
-        x = x + self.ls_2(self.mlp(self.ln_2(x)))
         return x
 
 
@@ -379,9 +377,7 @@ class Transformer(nn.Module):
         ])
 
     def get_cast_dtype(self) -> torch.dtype:
-        if hasattr(self.resblocks[0].mlp.c_fc, 'int8_original_dtype'):
-            return self.resblocks[0].mlp.c_fc.int8_original_dtype
-        return self.resblocks[0].mlp.c_fc.weight.dtype
+        return self.resblocks[0].attn.out_proj.weight.dtype
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
         for r in self.resblocks:
@@ -650,8 +646,6 @@ class TextTransformer(nn.Module):
         for block in self.transformer.resblocks:
             nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
             nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
-            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
-            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
 
         if self.text_projection is not None:
             nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
