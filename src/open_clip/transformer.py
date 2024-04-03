@@ -30,6 +30,38 @@ class LayerNorm(nn.LayerNorm):
         return x.to(orig_type)
 
 
+class RMSNorm(nn.Module):
+    def __init__(self, d, eps=1e-8):
+        """
+        Root Mean Square Layer Normalization, from https://github.com/bzhangGo/rmsnorm
+        Modified to make sure that normalization is done in float32.
+        :param d: model size
+        :param eps:  epsilon value, default 1e-8
+        """
+        super(RMSNorm, self).__init__()
+
+        self.eps = eps
+        self.d = d
+
+        self.scale = nn.Parameter(torch.ones(d))
+        self.register_parameter("scale", self.scale)
+
+    def forward(self, x):
+        orig_type = x.dtype
+        norm_x = x.to(torch.float32).norm(2, dim=-1, keepdim=True)
+        rms_x = norm_x * self.d ** (-1.0 / 2)
+        x_normed = x / (rms_x + self.eps)
+
+        return (self.scale * x_normed).to(orig_type)
+
+
+NORMALIZATION = {
+    'layernorm': LayerNorm,
+    'rmsnorm': RMSNorm,
+    'none': nn.Identity,
+}
+
+
 class QuickGELU(nn.Module):
     # NOTE This is slower than nn.GELU or nn.SiLU and uses more GPU memory
     def forward(self, x: torch.Tensor):
@@ -193,18 +225,19 @@ class ResidualAttentionBlock(nn.Module):
             mlp_ratio: float = 4.0,
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
+            attn_norm: Callable = LayerNorm,
+            mlp_norm: Callable = LayerNorm,
             is_cross_attention: bool = False,
     ):
         super().__init__()
 
-        self.ln_1 = norm_layer(d_model)
+        self.ln_1 = attn_norm(d_model)
         self.attn = nn.MultiheadAttention(d_model, n_head)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
 
-        self.ln_2 = norm_layer(d_model)
+        self.ln_2 = mlp_norm(d_model)
         mlp_width = int(d_model * mlp_ratio)
         self.mlp = nn.Sequential(OrderedDict([
             ("c_fc", nn.Linear(d_model, mlp_width)),
@@ -297,7 +330,8 @@ class Transformer(nn.Module):
             mlp_ratio: float = 4.0,
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
+            attn_norm: Callable = LayerNorm,
+            mlp_norm: Callable = LayerNorm,
     ):
         super().__init__()
         self.width = width
@@ -306,7 +340,7 @@ class Transformer(nn.Module):
 
         self.resblocks = nn.ModuleList([
             ResidualAttentionBlock(
-                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, norm_layer=norm_layer)
+                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, attn_norm=attn_norm, mlp_norm=mlp_norm)
             for _ in range(layers)
         ])
 
@@ -337,19 +371,20 @@ class VisionTransformer(nn.Module):
             heads: int,
             mlp_ratio: float,
             ls_init_value: float = None,
+            pre_norm: Callable = LayerNorm,
+            attn_norm: Callable = LayerNorm,
+            mlp_norm: Callable = LayerNorm,
+            final_norm: Callable = LayerNorm,
             attentional_pool: bool = False,
             attn_pooler_queries: int = 256,
             attn_pooler_heads: int = 8,
             output_dim: int = 512,
             patch_dropout: float = 0.,
-            no_ln_pre: bool = False,
             pos_embed_type: str = 'learnable',
             pool_type: str = 'tok',
             final_ln_after_pool: bool = False,
             act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
             output_tokens: bool = False,
-            final_layernorm: bool = True,
     ):
         super().__init__()
         assert pool_type in ('tok', 'avg', 'none')
@@ -382,7 +417,7 @@ class VisionTransformer(nn.Module):
         # setting a patch_dropout of 0. would mean it is disabled and this function would be the identity fn
         self.patch_dropout = PatchDropout(patch_dropout) if patch_dropout > 0. else nn.Identity()
 
-        self.ln_pre = nn.Identity() if no_ln_pre else norm_layer(width)
+        self.ln_pre = pre_norm(width)
         self.transformer = Transformer(
             width,
             layers,
@@ -390,7 +425,8 @@ class VisionTransformer(nn.Module):
             mlp_ratio,
             ls_init_value=ls_init_value,
             act_layer=act_layer,
-            norm_layer=norm_layer,
+            attn_norm=attn_norm,
+            mlp_norm=mlp_norm,
         )
 
         if attentional_pool:
@@ -428,7 +464,7 @@ class VisionTransformer(nn.Module):
             pool_dim = width
             self.pool_type = pool_type
 
-        self.ln_post = norm_layer(pool_dim) if final_layernorm else nn.Identity()
+        self.ln_post = final_norm(pool_dim)
         self.proj = nn.Parameter(scale * torch.randn(pool_dim, output_dim))
 
         self.init_parameters()
@@ -575,6 +611,9 @@ class TextTransformer(nn.Module):
             layers: int = 12,
             mlp_ratio: float = 4.0,
             ls_init_value: float = None,
+            attn_norm: Callable = LayerNorm,
+            mlp_norm: Callable = LayerNorm,
+            final_norm: Callable = LayerNorm,
             output_dim: int = 512,
             embed_cls: bool = False,
             no_causal_mask: bool = False,
@@ -582,9 +621,7 @@ class TextTransformer(nn.Module):
             pool_type: str = 'argmax',
             proj_bias: bool = False,
             act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
             output_tokens: bool = False,
-            final_layernorm: bool = True,
     ):
         super().__init__()
         assert pool_type in ('first', 'last', 'argmax', 'none')
@@ -611,9 +648,10 @@ class TextTransformer(nn.Module):
             mlp_ratio=mlp_ratio,
             ls_init_value=ls_init_value,
             act_layer=act_layer,
-            norm_layer=norm_layer,
+            attn_norm=attn_norm,
+            mlp_norm=mlp_norm,
         )
-        self.ln_final = norm_layer(width) if final_layernorm else nn.Identity()
+        self.ln_final = final_norm(width)
 
         if no_causal_mask:
             self.attn_mask = None

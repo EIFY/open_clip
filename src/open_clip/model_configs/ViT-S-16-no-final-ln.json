@@ -5,7 +5,7 @@
         "layers": 12,
         "width": 384,
         "patch_size": 16,
-        "final_layernorm": false
+        "final_norm": "none"
     },
     "text_cfg": {
         "context_length": 77,
@@ -13,6 +13,6 @@
         "width": 384,
         "heads": 6,
         "layers": 12,
-        "final_layernorm": false
+        "final_norm": "none"
     }
 }

@@ -19,33 +19,49 @@ from .hf_model import HFTextEncoder
 from .loss import METRICS
 from .modified_resnet import ModifiedResNet
 from .timm_model import TimmModel
-from .transformer import LayerNormFp32, LayerNorm, QuickGELU, Attention, VisionTransformer, TextTransformer,\
+from .transformer import NORMALIZATION, QuickGELU, Attention, VisionTransformer, TextTransformer,\
     text_global_pool
 from .utils import to_2tuple
 
 
 @dataclass
-class CLIPVisionCfg:
+class CLIPCfg:
+    layers: int = 12
+    width: int = 768
+    heads: Optional[int] = None
+    head_width: Optional[int] = None  # We allow both for backward compatibility. heads * head_width must be consistent with width
+    mlp_ratio: float = 4.0
+
+    ls_init_value: Optional[float] = None  # layer scale initial value
+    attn_norm: str = 'layernorm'
+    mlp_norm: str = 'layernorm'
+    final_norm: str = 'layernorm'
+    final_ln_after_pool: bool = False  # apply final LayerNorm after pooling
+    pool_type: str = 'none'
+
+    # Normalization config backward compatibility:
+    no_ln_pre: bool = False  # disable pre transformer LayerNorm
+
+    output_tokens: bool = False
+    act_kwargs: Optional[dict] = None
+    norm_kwargs: Optional[dict] = None
+
+
+@dataclass
+class CLIPVisionCfg(CLIPCfg):
     layers: Union[Tuple[int, int, int, int], int] = 12
     width: int = 768
     head_width: int = 64
-    mlp_ratio: float = 4.0
     patch_size: int = 16
     image_size: Union[Tuple[int, int], int] = 224
-    final_layernorm: bool = True
 
-    ls_init_value: Optional[float] = None  # layer scale initial value
+    pre_norm: str = 'layernorm'
     patch_dropout: float = 0.  # what fraction of patches to dropout during training (0 would mean disabled and no patches dropped) - 0.5 to 0.75 recommended in the paper for optimal results
     attentional_pool: bool = False  # whether to use attentional pooler in the last embedding layer (overrides pool_type)
     attn_pooler_queries: int = 256  # n_queries for attentional pooler
     attn_pooler_heads: int = 8  # n heads for attentional_pooling
-    no_ln_pre: bool = False  # disable pre transformer LayerNorm
     pos_embed_type: str = 'learnable'
-    final_ln_after_pool: bool = False  # apply final LayerNorm after pooling
     pool_type: str = 'tok'
-    output_tokens: bool = False
-    act_kwargs: Optional[dict] = None
-    norm_kwargs: Optional[dict] = None
 
     timm_model_name: Optional[str] = None  # a valid model name overrides layers, width, patch_size
     timm_model_pretrained: bool = False  # use (imagenet) pretrained weights for named model
@@ -57,7 +73,7 @@ class CLIPVisionCfg:
 
 
 @dataclass
-class CLIPTextCfg:
+class CLIPTextCfg(CLIPCfg):
     context_length: int = 77
     vocab_size: int = 49408
     hf_tokenizer_name: Optional[str] = None
@@ -66,18 +82,11 @@ class CLIPTextCfg:
     width: int = 512
     heads: int = 8
     layers: int = 12
-    mlp_ratio: float = 4.0
-    ls_init_value: Optional[float] = None  # layer scale initial value
     embed_cls: bool = False
     pad_id: int = 0
     no_causal_mask: bool = False  # disable causal masking
-    final_ln_after_pool: bool = False  # apply final LayerNorm after pooling
     pool_type: str = 'argmax'
     proj_bias: bool = False
-    output_tokens: bool = False
-    act_kwargs: dict = None
-    norm_kwargs: dict = None
-    final_layernorm: bool = True
 
     # HuggingFace specific text tower config
     hf_model_name: Optional[str] = None
@@ -132,43 +141,53 @@ def _build_vision_tower(
             image_size=vision_cfg.image_size,
         )
     elif isinstance(vision_cfg.layers, (tuple, list)):
-        vision_heads = vision_cfg.width * 32 // vision_cfg.head_width
+        assert(vision_cfg.heads or vision_cfg.head_width)
+        if vision_cfg.heads is None:
+            vision_cfg.heads = vision_cfg.width * 32 // vision_cfg.head_width
+        if vision_cfg.head_width is None:
+            vision_cfg.head_width = vision_cfg.width * 32 // vision_cfg.heads
+        assert(vision_cfg.head_width * vision_cfg.heads == vision_cfg.width * 32)
         visual = ModifiedResNet(
             layers=vision_cfg.layers,
             output_dim=embed_dim,
-            heads=vision_heads,
+            heads=vision_cfg.heads,
             image_size=vision_cfg.image_size,
             width=vision_cfg.width,
         )
     else:
-        vision_heads = vision_cfg.width // vision_cfg.head_width
-        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
-        if vision_cfg.norm_kwargs:
-            norm_layer = partial(norm_layer, **vision_cfg.norm_kwargs)
-        if vision_cfg.act_kwargs is not None:
-            act_layer = partial(act_layer, **vision_cfg.act_kwargs)
+        assert(vision_cfg.heads or vision_cfg.head_width)
+        if vision_cfg.heads is None:
+            vision_cfg.heads = vision_cfg.width // vision_cfg.head_width
+        if vision_cfg.head_width is None:
+            vision_cfg.head_width = vision_cfg.width // vision_cfg.heads
+        assert(vision_cfg.head_width * vision_cfg.heads == vision_cfg.width)
+        if vision_cfg.no_ln_pre:
+            vision_cfg.pre_norm = 'none'
+        vision_cfg.norm_kwargs = vision_cfg.norm_kwargs or {}
+        vision_cfg.act_kwargs = vision_cfg.act_kwargs or {}
 
         visual = VisionTransformer(
             image_size=vision_cfg.image_size,
             patch_size=vision_cfg.patch_size,
             width=vision_cfg.width,
             layers=vision_cfg.layers,
-            heads=vision_heads,
+            heads=vision_cfg.heads,
             mlp_ratio=vision_cfg.mlp_ratio,
             ls_init_value=vision_cfg.ls_init_value,
+            pre_norm=partial(NORMALIZATION[vision_cfg.pre_norm], **vision_cfg.norm_kwargs),
+            attn_norm=partial(NORMALIZATION[vision_cfg.attn_norm], **vision_cfg.norm_kwargs),
+            mlp_norm=partial(NORMALIZATION[vision_cfg.mlp_norm], **vision_cfg.norm_kwargs),
+            final_norm=partial(NORMALIZATION[vision_cfg.final_norm], **vision_cfg.norm_kwargs),
             patch_dropout=vision_cfg.patch_dropout,
             attentional_pool=vision_cfg.attentional_pool,
             attn_pooler_queries=vision_cfg.attn_pooler_queries,
             attn_pooler_heads=vision_cfg.attn_pooler_heads,
             pos_embed_type=vision_cfg.pos_embed_type,
-            no_ln_pre=vision_cfg.no_ln_pre,
             final_ln_after_pool=vision_cfg.final_ln_after_pool,
             pool_type=vision_cfg.pool_type,
             output_tokens=vision_cfg.output_tokens,
             output_dim=embed_dim,
-            act_layer=act_layer,
-            norm_layer=norm_layer,
-            final_layernorm=vision_cfg.final_layernorm,
+            act_layer=partial(act_layer, **vision_cfg.act_kwargs),
         )
 
     return visual
@@ -193,12 +212,17 @@ def _build_text_tower(
             output_tokens=text_cfg.output_tokens,
         )
     else:
+        assert(text_cfg.heads or text_cfg.head_width)
+        if text_cfg.heads is None:
+            text_cfg.heads = text_cfg.width // text_cfg.head_width
+        if text_cfg.head_width is None:
+            text_cfg.head_width = text_cfg.width // text_cfg.heads
+        assert(text_cfg.heads == text_cfg.width // text_cfg.head_width)
+        if text_cfg.no_ln_pre:
+            text_cfg.pre_norm = 'none'
+        text_cfg.norm_kwargs = text_cfg.norm_kwargs or {}
+        text_cfg.act_kwargs = text_cfg.act_kwargs or {}
         act_layer = QuickGELU if quick_gelu else nn.GELU
-        norm_layer = LayerNormFp32 if cast_dtype in (torch.float16, torch.bfloat16) else LayerNorm
-        if text_cfg.norm_kwargs:
-            norm_layer = partial(norm_layer, **text_cfg.norm_kwargs)
-        if text_cfg.act_kwargs is not None:
-            act_layer = partial(act_layer, **text_cfg.act_kwargs)
 
         text = TextTransformer(
             context_length=text_cfg.context_length,
@@ -208,6 +232,9 @@ def _build_text_tower(
             layers=text_cfg.layers,
             mlp_ratio=text_cfg.mlp_ratio,
             ls_init_value=text_cfg.ls_init_value,
+            attn_norm=partial(NORMALIZATION[text_cfg.attn_norm], **text_cfg.norm_kwargs),
+            mlp_norm=partial(NORMALIZATION[text_cfg.mlp_norm], **text_cfg.norm_kwargs),
+            final_norm=partial(NORMALIZATION[text_cfg.final_norm], **text_cfg.norm_kwargs),
             output_dim=embed_dim,
             embed_cls=text_cfg.embed_cls,
             no_causal_mask=text_cfg.no_causal_mask,
@@ -215,9 +242,7 @@ def _build_text_tower(
             pool_type=text_cfg.pool_type,
             proj_bias=text_cfg.proj_bias,
             output_tokens=text_cfg.output_tokens,
-            act_layer=act_layer,
-            norm_layer=norm_layer,
-            final_layernorm=text_cfg.final_layernorm,
+            act_layer=partial(act_layer, **text_cfg.act_kwargs),
         )
     return text
 
