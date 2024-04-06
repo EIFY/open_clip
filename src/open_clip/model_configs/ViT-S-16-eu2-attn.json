@@ -1,0 +1,25 @@
+{
+    "embed_dim": 384,
+    "vision_cfg": {
+        "image_size": 224,
+        "layers": 12,
+        "width": 384,
+        "patch_size": 16,
+        "attn": "euclidean-squared",
+        "pre_norm": "none",
+        "attn_norm": "none",
+        "mlp_norm": "layernorm",
+        "final_norm": "none"
+    },
+    "text_cfg": {
+        "context_length": 77,
+        "vocab_size": 49408,
+        "width": 384,
+        "heads": 6,
+        "layers": 12,
+        "attn": "euclidean-squared",
+        "attn_norm": "none",
+        "mlp_norm": "layernorm",
+        "final_norm": "none"
+    }
+}

@@ -6,6 +6,7 @@ from functools import partial
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.modules.linear import NonDynamicallyQuantizableLinear
 from torch.utils.checkpoint import checkpoint
 
 from .utils import to_2tuple
@@ -59,6 +60,81 @@ NORMALIZATION = {
     'layernorm': LayerNorm,
     'rmsnorm': RMSNorm,
     'none': nn.Identity,
+}
+
+
+def scaled_euclidean_squared_attention(query, key, value, attn_mask=None, scale=None) -> torch.Tensor:
+    """Direct implementation, marginally slower than adopted F.scaled_dot_product_attention()."""
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    query_sq = query.square().sum(-1, keepdim=True)
+    key_sq = key.square().sum(-1, keepdim=True)
+    attn_weight = scale_factor * (2 * query @ key.transpose(-2, -1) - query_sq - key_sq.transpose(-2, -1))
+    if attn_mask is not None:
+        attn_weight = attn_weight + attn_mask
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    return attn_weight @ value
+
+
+def multi_head_eu2_attention_forward(
+    x: torch.Tensor,
+    num_heads: int,
+    in_proj_weight: torch.Tensor,
+    in_proj_bias: Optional[torch.Tensor],
+    out_proj_weight: torch.Tensor,
+    out_proj_bias: Optional[torch.Tensor],
+    attn_mask: Optional[torch.Tensor] = None,
+    scale: Optional[torch.Tensor] = None):
+
+    # self-attention only for now
+    L, N, C = x.shape
+    q, k, v = F.linear(x, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
+    q = q.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
+    k = k.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
+    v = v.contiguous().view(L, N * num_heads, -1).transpose(0, 1)
+
+    # attn_mask here assumed to be of shape (L,S)
+    # attn_output = scaled_euclidean_squared_attention(q, k, v, attn_mask, scale)
+
+    q_sq = q.square().sum(-1, keepdim=True)
+    k_sq = k.square().sum(-1, keepdim=True)
+    attn_bias = -scale * (q_sq + k_sq.transpose(-2, -1))
+    attn_mask = attn_bias if attn_mask is None else attn_mask + attn_bias
+    # "scale" parameter must be float, not even scaler tensor!
+    attn_output = F.scaled_dot_product_attention(2. * scale * q, k, v, attn_mask=attn_mask, scale=1.)
+
+    attn_output = attn_output.transpose(0, 1).reshape(L, N, C)
+    attn_output = F.linear(attn_output, out_proj_weight, out_proj_bias)
+    return attn_output, None
+
+
+class MultiheadEu2Attention(nn.Module):
+
+    def __init__(self, embed_dim, num_heads, bias: bool = False, device=None, dtype=None):
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.in_proj_weight = nn.Parameter(torch.empty((3 * embed_dim, embed_dim), **factory_kwargs))
+        self.in_proj_bias = None
+        if bias:
+            self.in_proj_bias = nn.Parameter(torch.empty(3 * embed_dim, **factory_kwargs))
+        self.out_proj = NonDynamicallyQuantizableLinear(embed_dim, embed_dim, bias=bias, **factory_kwargs)
+        self.scale = nn.Parameter(-torch.ones([]) * math.log(embed_dim) / 2)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        nn.init.xavier_uniform_(self.in_proj_weight)
+        if self.in_proj_bias is not None:
+            nn.init.constant_(self.in_proj_bias, 0.)
+            nn.init.constant_(self.out_proj.bias, 0.)
+
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, need_weights=False, attn_mask: Optional[torch.Tensor] = None):
+        return multi_head_eu2_attention_forward(query, self.num_heads, self.in_proj_weight, self.in_proj_bias, self.out_proj.weight, self.out_proj.bias, attn_mask, self.scale.exp())
+
+
+ATTENTION = {
+    'dot-product': nn.MultiheadAttention,
+    'euclidean-squared': MultiheadEu2Attention,
 }
 
 
@@ -223,6 +299,7 @@ class ResidualAttentionBlock(nn.Module):
             d_model: int,
             n_head: int,
             mlp_ratio: float = 4.0,
+            attn: Callable = nn.MultiheadAttention,
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
             attn_norm: Callable = LayerNorm,
@@ -232,7 +309,7 @@ class ResidualAttentionBlock(nn.Module):
         super().__init__()
 
         self.ln_1 = attn_norm(d_model)
-        self.attn = nn.MultiheadAttention(d_model, n_head)
+        self.attn = attn(d_model, n_head)
         self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
@@ -328,6 +405,7 @@ class Transformer(nn.Module):
             layers: int,
             heads: int,
             mlp_ratio: float = 4.0,
+            attn: Callable = nn.MultiheadAttention,
             ls_init_value: float = None,
             act_layer: Callable = nn.GELU,
             attn_norm: Callable = LayerNorm,
@@ -340,7 +418,7 @@ class Transformer(nn.Module):
 
         self.resblocks = nn.ModuleList([
             ResidualAttentionBlock(
-                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, attn_norm=attn_norm, mlp_norm=mlp_norm)
+                width, heads, mlp_ratio, attn=attn, ls_init_value=ls_init_value, act_layer=act_layer, attn_norm=attn_norm, mlp_norm=mlp_norm)
             for _ in range(layers)
         ])
 
@@ -370,6 +448,7 @@ class VisionTransformer(nn.Module):
             layers: int,
             heads: int,
             mlp_ratio: float,
+            attn: Callable = nn.MultiheadAttention,
             ls_init_value: float = None,
             pre_norm: Callable = LayerNorm,
             attn_norm: Callable = LayerNorm,
@@ -423,6 +502,7 @@ class VisionTransformer(nn.Module):
             layers,
             heads,
             mlp_ratio,
+            attn=attn,
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             attn_norm=attn_norm,
@@ -610,6 +690,7 @@ class TextTransformer(nn.Module):
             heads: int = 8,
             layers: int = 12,
             mlp_ratio: float = 4.0,
+            attn: Callable = nn.MultiheadAttention,
             ls_init_value: float = None,
             attn_norm: Callable = LayerNorm,
             mlp_norm: Callable = LayerNorm,
@@ -646,6 +727,7 @@ class TextTransformer(nn.Module):
             layers=layers,
             heads=heads,
             mlp_ratio=mlp_ratio,
+            attn=attn,
             ls_init_value=ls_init_value,
             act_layer=act_layer,
             attn_norm=attn_norm,

@@ -19,7 +19,7 @@ from .hf_model import HFTextEncoder
 from .loss import METRICS
 from .modified_resnet import ModifiedResNet
 from .timm_model import TimmModel
-from .transformer import NORMALIZATION, QuickGELU, Attention, VisionTransformer, TextTransformer,\
+from .transformer import ATTENTION, NORMALIZATION, QuickGELU, Attention, VisionTransformer, TextTransformer,\
     text_global_pool
 from .utils import to_2tuple
 
@@ -31,6 +31,7 @@ class CLIPCfg:
     heads: Optional[int] = None
     head_width: Optional[int] = None  # We allow both for backward compatibility. heads * head_width must be consistent with width
     mlp_ratio: float = 4.0
+    attn: str = 'dot-product'
 
     ls_init_value: Optional[float] = None  # layer scale initial value
     attn_norm: str = 'layernorm'
@@ -173,6 +174,7 @@ def _build_vision_tower(
             layers=vision_cfg.layers,
             heads=vision_cfg.heads,
             mlp_ratio=vision_cfg.mlp_ratio,
+            attn=ATTENTION[vision_cfg.attn],
             ls_init_value=vision_cfg.ls_init_value,
             pre_norm=partial(NORMALIZATION[vision_cfg.pre_norm], **vision_cfg.norm_kwargs),
             attn_norm=partial(NORMALIZATION[vision_cfg.attn_norm], **vision_cfg.norm_kwargs),
@@ -231,6 +233,7 @@ def _build_text_tower(
             heads=text_cfg.heads,
             layers=text_cfg.layers,
             mlp_ratio=text_cfg.mlp_ratio,
+            attn=ATTENTION[text_cfg.attn],
             ls_init_value=text_cfg.ls_init_value,
             attn_norm=partial(NORMALIZATION[text_cfg.attn_norm], **text_cfg.norm_kwargs),
             mlp_norm=partial(NORMALIZATION[text_cfg.mlp_norm], **text_cfg.norm_kwargs),
