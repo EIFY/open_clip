@@ -1,3 +1,5 @@
+>「何せ、私はただの『月』だから。本当の『太陽』はとっくにいないもの。」
+
 This is the OpenCLIP fork for our ECCV '24 Beyond Euclidean Workshop paper, [Embedding Geometries of Contrastive Language-Image Pre-Training](https://arxiv.org/abs/2409.13079). The most important new argument is `--geometry`:
 
 https://github.com/EIFY/open_clip/blob/b99af52fcd766a94b3929909b376dfec364de19a/src/training/params.py#L473-L478
@@ -12,4 +14,4 @@ https://github.com/EIFY/open_clip/blob/b99af52fcd766a94b3929909b376dfec364de19a/
 
 especially for models trained with entailment loss. The distance squared logit models presented in the paper are trained with either `--init-logit-scale 0` (ones without entailment loss) or `--init-logit-scale " -1."` (ones with entailment loss).
 
-Weights for ViT-B/16 and ViT-B/32 EuCLIP / MERU / CLIP models (Sec. 5.1 & 5.2) are [available on Hugging Face](https://huggingface.co/nahidalam/CLIP_Embedding_Geometries).
+Weights for ViT-B/16 and ViT-B/32 EuCLIP / MERU / CLIP models (Sec. 5.1 & 5.2) are [available on Hugging Face](https://huggingface.co/nahidalam/CLIP_Embedding_Geometries). To run the DataComp zero-shot eval, install the `euclip` fork of [CLIP Benchmark](https://github.com/EIFY/CLIP_benchmark/tree/euclip/) and [DataComp](https://github.com/EIFY/datacomp/tree/euclip/).
