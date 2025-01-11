@@ -506,6 +506,12 @@ def parse_args(args):
         help="Probability of randomly prefixing subreddit name (word-segmented) "
         "to the caption for RedCaps instances."
     )
+    parser.add_argument(
+        "--logq",
+        default=False,
+        action="store_true",
+        help="Whether to use log-Q correction."
+    )
 
     args = parser.parse_args(args)
 

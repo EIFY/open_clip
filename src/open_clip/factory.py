@@ -366,6 +366,7 @@ def create_loss(args):
         geometry=args.geometry,
         entailment_weight=args.entailment_weight,
         K=args.min_radius,
+        logq=args.logq,
     )
 
 

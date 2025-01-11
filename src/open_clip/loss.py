@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -177,6 +179,7 @@ class ClipLoss(nn.Module):
             geometry='clip',
             entailment_weight=0.0,
             K=0.1,
+            logq=False,
     ):
         super().__init__()
         self.local_loss = local_loss
@@ -196,6 +199,9 @@ class ClipLoss(nn.Module):
         # cache state
         self.prev_num_logits = 0
         self.labels = {}
+        self.logq = None
+        if logq:
+            self.logq = {}
 
     def get_ground_truth(self, device, num_logits) -> torch.Tensor:
         # calculated ground-truth and cache if enabled
@@ -209,6 +215,20 @@ class ClipLoss(nn.Module):
         else:
             labels = self.labels[device]
         return labels
+
+    def get_logq_correction(self, device, num_logits) -> torch.Tensor:
+        if device not in self.logq:
+            batch_size = num_logits * self.world_size
+            logq_correction = math.log(batch_size - 1) * torch.ones(num_logits, batch_size, device=device)
+            logq_correction[
+                torch.arange(num_logits, device=device, dtype=torch.long),
+                torch.arange(num_logits * self.rank, num_logits * self.rank + num_logits, device=device, dtype=torch.long)
+            ] = 0
+            self.logq[device] = logq_correction
+        else:
+            logq_correction = self.logq[device]
+        return logq_correction
+
 
     def get_logits(self, image_features, text_features, logit_scale, curvature):
         if self.world_size > 1:
@@ -233,6 +253,10 @@ class ClipLoss(nn.Module):
         logits_per_image, logits_per_text = self.get_logits(image_features, text_features, logit_scale, curvature)
 
         labels = self.get_ground_truth(device, logits_per_image.shape[0])
+        if self.logq is not None:
+            logq_correction = self.get_logq_correction(device, logits_per_image.shape[0])
+            logits_per_image = logits_per_image - logq_correction
+            logits_per_text = logits_per_text - logq_correction
 
         total_loss = contrastive_loss = (
             F.cross_entropy(logits_per_image, labels) +
